@@ -250,13 +250,105 @@ export const fetchKeyMetrics = async (ticker, apiKey) => {
       pbRatio: metrics.pbRatioTTM || metrics.pbRatio,
       evToEbitda: metrics.enterpriseValueOverEBITDATTM || metrics.enterpriseValueOverEBITDA,
       evToSales: metrics.evToSalesTTM || metrics.evToSales,
+      evToRevenue: metrics.evToRevenue || metrics.evToSalesTTM,
       grossProfitMargin: metrics.grossProfitMarginTTM || metrics.grossProfitMargin,
       operatingProfitMargin: metrics.operatingProfitMarginTTM || metrics.operatingProfitMargin,
       netProfitMargin: metrics.netProfitMarginTTM || metrics.netProfitMargin,
       revenuePerShare: metrics.revenuePerShareTTM || metrics.revenuePerShare,
+      roe: metrics.roeTTM || metrics.roe,
+      roa: metrics.roaTTM || metrics.roa,
+      roic: metrics.roicTTM || metrics.roic,
+      debtToEquity: metrics.debtToEquityTTM || metrics.debtToEquity,
+      currentRatio: metrics.currentRatioTTM || metrics.currentRatio,
+      quickRatio: metrics.quickRatioTTM || metrics.quickRatio,
+      freeCashFlowYield: metrics.freeCashFlowYieldTTM || metrics.freeCashFlowYield,
+      dividendYield: metrics.dividendYieldTTM || metrics.dividendYield || metrics.dividendYieldPercentageTTM,
+      payoutRatio: metrics.payoutRatioTTM || metrics.payoutRatio,
     };
   } catch (err) {
     console.warn(`Failed to fetch key metrics for ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Fetch financial ratios (profitability, liquidity, solvency)
+ */
+export const fetchFinancialRatios = async (ticker, apiKey) => {
+  try {
+    const data = await fetchFMP(`/ratios?symbol=${ticker}&period=annual&limit=3`, apiKey);
+
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    const latest = data[0];
+    // Calculate 3Y averages for key ratios
+    const avg = (field) => {
+      const values = data.map(d => d[field]).filter(v => v != null && !isNaN(v));
+      return values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : null;
+    };
+
+    return {
+      // Latest values
+      grossProfitMargin: latest.grossProfitMargin,
+      operatingProfitMargin: latest.operatingProfitMargin,
+      netProfitMargin: latest.netProfitMargin,
+      returnOnEquity: latest.returnOnEquity,
+      returnOnAssets: latest.returnOnAssets,
+      returnOnCapitalEmployed: latest.returnOnCapitalEmployed,
+      debtRatio: latest.debtRatio,
+      debtEquityRatio: latest.debtEquityRatio,
+      interestCoverage: latest.interestCoverage,
+      currentRatio: latest.currentRatio,
+      quickRatio: latest.quickRatio,
+      cashRatio: latest.cashRatio,
+      assetTurnover: latest.assetTurnover,
+      inventoryTurnover: latest.inventoryTurnover,
+      receivablesTurnover: latest.receivablesTurnover,
+      payablesTurnover: latest.payablesTurnover,
+      operatingCashFlowPerShare: latest.operatingCashFlowPerShare,
+      freeCashFlowPerShare: latest.freeCashFlowPerShare,
+      priceToOperatingCashFlowsRatio: latest.priceToOperatingCashFlowsRatio,
+      priceToFreeCashFlowsRatio: latest.priceToFreeCashFlowsRatio,
+      // 3Y averages
+      avgROE: avg('returnOnEquity'),
+      avgROA: avg('returnOnAssets'),
+      avgGrossMargin: avg('grossProfitMargin'),
+      avgOperatingMargin: avg('operatingProfitMargin'),
+      avgNetMargin: avg('netProfitMargin'),
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch financial ratios for ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Fetch financial scores (Altman Z-Score, Piotroski Score)
+ */
+export const fetchFinancialScores = async (ticker, apiKey) => {
+  try {
+    const data = await fetchFMP(`/score?symbol=${ticker}`, apiKey);
+
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    const score = data[0];
+    return {
+      altmanZScore: score.altmanZScore,
+      piotroskiScore: score.piotroskiScore,
+      workingCapital: score.workingCapital,
+      totalAssets: score.totalAssets,
+      retainedEarnings: score.retainedEarnings,
+      ebit: score.ebit,
+      marketCap: score.marketCap,
+      totalLiabilities: score.totalLiabilities,
+      revenue: score.revenue,
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch financial scores for ${ticker}:`, err);
     return null;
   }
 };
@@ -422,11 +514,11 @@ export const fetchEarningsCalendar = async (ticker, apiKey) => {
 };
 
 /**
- * Fetch all consensus data for a single ticker (enhanced with 9 API calls)
+ * Fetch all consensus data for a single ticker (enhanced with 11 API calls)
  */
 export const fetchConsensusData = async (ticker, apiKey) => {
-  // Fetch all data in parallel (9 API calls per ticker)
-  const [estimates, quote, ev, metrics, income, priceTargets, ratings, growth, earnings] = await Promise.all([
+  // Fetch all data in parallel (11 API calls per ticker)
+  const [estimates, quote, ev, metrics, income, priceTargets, ratings, growth, earnings, ratios, scores] = await Promise.all([
     fetchAnalystEstimates(ticker, apiKey),
     fetchQuote(ticker, apiKey),
     fetchEnterpriseValue(ticker, apiKey),
@@ -436,6 +528,8 @@ export const fetchConsensusData = async (ticker, apiKey) => {
     fetchAnalystRatings(ticker, apiKey),
     fetchFinancialGrowth(ticker, apiKey),
     fetchEarningsCalendar(ticker, apiKey),
+    fetchFinancialRatios(ticker, apiKey),
+    fetchFinancialScores(ticker, apiKey),
   ]);
 
   if (!estimates && !quote) {
@@ -518,7 +612,44 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       operatingMargin: metrics?.operatingProfitMargin || income?.operatingIncomeRatio,
       netMargin: metrics?.netProfitMargin || income?.netIncomeRatio,
       peRatio: metrics?.peRatio,
+      pbRatio: metrics?.pbRatio,
       evToEbitda: metrics?.evToEbitda,
+    },
+
+    // Profitability & Returns
+    profitability: {
+      roe: metrics?.roe || ratios?.returnOnEquity,
+      roa: metrics?.roa || ratios?.returnOnAssets,
+      roic: metrics?.roic || ratios?.returnOnCapitalEmployed,
+      avgROE: ratios?.avgROE,
+      avgROA: ratios?.avgROA,
+      freeCashFlowYield: metrics?.freeCashFlowYield,
+    },
+
+    // Balance Sheet Health
+    health: {
+      debtToEquity: metrics?.debtToEquity || ratios?.debtEquityRatio,
+      currentRatio: metrics?.currentRatio || ratios?.currentRatio,
+      quickRatio: metrics?.quickRatio || ratios?.quickRatio,
+      interestCoverage: ratios?.interestCoverage,
+      altmanZScore: scores?.altmanZScore,
+      piotroskiScore: scores?.piotroskiScore,
+    },
+
+    // Cash Flow & Dividend
+    cashFlow: {
+      freeCashFlowPerShare: ratios?.freeCashFlowPerShare,
+      operatingCashFlowPerShare: ratios?.operatingCashFlowPerShare,
+      priceToFCF: ratios?.priceToFreeCashFlowsRatio,
+      dividendYield: metrics?.dividendYield,
+      payoutRatio: metrics?.payoutRatio,
+    },
+
+    // Efficiency
+    efficiency: {
+      assetTurnover: ratios?.assetTurnover,
+      inventoryTurnover: ratios?.inventoryTurnover,
+      receivablesTurnover: ratios?.receivablesTurnover,
     },
 
     // Analyst price targets
@@ -564,37 +695,78 @@ export const fetchConsensusData = async (ticker, apiKey) => {
 
 /**
  * Batch fetch consensus data for multiple tickers
+ * Includes symbol resolution for international tickers
  * @param {string[]} tickers - Array of ticker symbols
  * @param {string} apiKey - FMP API key
- * @param {function} onProgress - Optional progress callback (current, total)
+ * @param {function} onProgress - Optional progress callback (current, total, currentTicker, phase)
  * @returns {Object} Map of ticker -> consensus data
  */
 export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
   const results = {};
+  const symbolMap = {}; // Maps user ticker -> FMP symbol
   const total = tickers.length;
 
-  // Process sequentially to respect rate limits
-  for (let i = 0; i < tickers.length; i++) {
-    const ticker = tickers[i];
+  // Phase 1: Identify which tickers need symbol resolution
+  // International tickers typically have exchange suffixes (.AS, .T, .L, etc.)
+  // or are numeric (Japanese stocks like 6525)
+  const needsResolution = tickers.filter(t => {
+    const hasExchangeSuffix = t.includes('.') && !/^[A-Z]+$/.test(t);
+    const isNumeric = /^\d+/.test(t);
+    return hasExchangeSuffix || isNumeric;
+  });
 
-    try {
-      const data = await fetchConsensusData(ticker, apiKey);
-      if (data) {
-        results[ticker] = data;
+  // Phase 2: Resolve international symbols if needed
+  if (needsResolution.length > 0) {
+    console.log('[FMP] Resolving international symbols:', needsResolution);
+
+    for (const ticker of needsResolution) {
+      try {
+        const resolved = await resolveSymbol(ticker, apiKey);
+        if (resolved) {
+          symbolMap[ticker] = resolved.fmpSymbol;
+          console.log(`[FMP] Resolved ${ticker} -> ${resolved.fmpSymbol} (${resolved.exchange})`);
+        } else {
+          // If resolution fails, try the original ticker anyway
+          symbolMap[ticker] = ticker;
+        }
+      } catch (err) {
+        console.warn(`[FMP] Failed to resolve ${ticker}:`, err);
+        symbolMap[ticker] = ticker;
       }
-    } catch (err) {
-      console.warn(`Failed to fetch consensus data for ${ticker}:`, err);
+
+      // Small delay for rate limiting
+      await new Promise(resolve => setTimeout(resolve, 150));
     }
+  }
+
+  // Phase 3: Fetch consensus data for all tickers
+  for (let i = 0; i < tickers.length; i++) {
+    const userTicker = tickers[i];
+    const fmpSymbol = symbolMap[userTicker] || userTicker;
 
     if (onProgress) {
-      onProgress(i + 1, total);
+      onProgress(i + 1, total, userTicker);
+    }
+
+    try {
+      const data = await fetchConsensusData(fmpSymbol, apiKey);
+      if (data) {
+        // Store with user's original ticker, but include the FMP symbol
+        results[userTicker] = {
+          ...data,
+          ticker: userTicker, // Keep user's ticker for display
+          fmpSymbol: fmpSymbol !== userTicker ? fmpSymbol : undefined,
+        };
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch consensus data for ${userTicker} (${fmpSymbol}):`, err);
     }
 
     // Delay between tickers to respect rate limits
-    // 9 API calls per ticker, 300 calls/min limit = ~33 tickers/min max
-    // Using 400ms delay = ~2.5 tickers/sec = safe margin
+    // 11 API calls per ticker + potential resolution, 300 calls/min limit
+    // 11 calls = needs ~2.2s at 5 calls/sec, using 2.5s delay for safety
     if (i < tickers.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 400));
+      await new Promise(resolve => setTimeout(resolve, 2500));
     }
   }
 
@@ -611,4 +783,146 @@ export const validateApiKey = async (apiKey) => {
   } catch {
     return false;
   }
+};
+
+/**
+ * Search for a symbol in FMP's database
+ * Useful for finding the correct FMP symbol for international stocks
+ * @param {string} query - Search query (ticker or company name)
+ * @param {string} apiKey - FMP API key
+ * @param {number} limit - Max results to return (default: 10)
+ * @returns {Promise<Array<{symbol: string, name: string, currency: string, exchange: string}>>}
+ */
+export const searchSymbol = async (query, apiKey, limit = 10) => {
+  try {
+    const data = await fetchFMP(`/search-symbol?query=${encodeURIComponent(query)}&limit=${limit}`, apiKey);
+
+    if (!data || !Array.isArray(data)) {
+      return [];
+    }
+
+    return data.map(item => ({
+      symbol: item.symbol,
+      name: item.name,
+      currency: item.currency,
+      exchange: item.exchangeShortName || item.exchange,
+    }));
+  } catch (err) {
+    console.warn(`Failed to search symbol for ${query}:`, err);
+    return [];
+  }
+};
+
+/**
+ * Resolve a user-provided ticker to FMP's symbol format
+ * Handles international tickers with exchange suffixes (e.g., "BESI.AS" -> "BESI.AS" or proper FMP format)
+ * @param {string} ticker - User's ticker symbol
+ * @param {string} apiKey - FMP API key
+ * @returns {Promise<{fmpSymbol: string, name: string, exchange: string} | null>}
+ */
+export const resolveSymbol = async (ticker, apiKey) => {
+  // First, try direct quote - if it works, the symbol is valid
+  try {
+    const quoteData = await fetchFMP(`/quote?symbol=${ticker}`, apiKey);
+    if (quoteData && quoteData.length > 0) {
+      return {
+        fmpSymbol: ticker,
+        name: quoteData[0].name,
+        exchange: quoteData[0].exchange,
+      };
+    }
+  } catch (e) {
+    // Quote failed, try search
+  }
+
+  // Extract the base ticker (without exchange suffix)
+  const baseTicker = ticker.split('.')[0];
+
+  // Search for the symbol
+  try {
+    const results = await searchSymbol(baseTicker, apiKey, 20);
+
+    if (results.length === 0) {
+      return null;
+    }
+
+    // Try to find exact match or best match
+    // Priority: exact match > same exchange suffix > first result
+    const exactMatch = results.find(r => r.symbol.toUpperCase() === ticker.toUpperCase());
+    if (exactMatch) {
+      return {
+        fmpSymbol: exactMatch.symbol,
+        name: exactMatch.name,
+        exchange: exactMatch.exchange,
+      };
+    }
+
+    // Check for exchange suffix match (e.g., .AS for Amsterdam, .T for Tokyo)
+    const exchangeSuffix = ticker.includes('.') ? ticker.split('.')[1].toUpperCase() : null;
+    if (exchangeSuffix) {
+      const suffixMatch = results.find(r => r.symbol.toUpperCase().endsWith(`.${exchangeSuffix}`));
+      if (suffixMatch) {
+        return {
+          fmpSymbol: suffixMatch.symbol,
+          name: suffixMatch.name,
+          exchange: suffixMatch.exchange,
+        };
+      }
+
+      // Look for exchange name match
+      const exchangeMap = {
+        'AS': ['AMS', 'AMSTERDAM', 'EURONEXT'],
+        'T': ['TSE', 'TOKYO', 'JPX'],
+        'L': ['LSE', 'LONDON'],
+        'HK': ['HKEX', 'HONG KONG'],
+        'DE': ['XETRA', 'FRANKFURT'],
+        'PA': ['EPA', 'PARIS', 'EURONEXT'],
+      };
+
+      const possibleExchanges = exchangeMap[exchangeSuffix] || [];
+      const exchangeMatch = results.find(r =>
+        possibleExchanges.some(ex =>
+          r.exchange?.toUpperCase().includes(ex) || r.symbol.toUpperCase().includes(`.${ex}`)
+        )
+      );
+      if (exchangeMatch) {
+        return {
+          fmpSymbol: exchangeMatch.symbol,
+          name: exchangeMatch.name,
+          exchange: exchangeMatch.exchange,
+        };
+      }
+    }
+
+    // Return first result as fallback
+    return {
+      fmpSymbol: results[0].symbol,
+      name: results[0].name,
+      exchange: results[0].exchange,
+    };
+  } catch (err) {
+    console.warn(`Failed to resolve symbol ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Batch resolve multiple symbols
+ * @param {string[]} tickers - Array of user tickers
+ * @param {string} apiKey - FMP API key
+ * @returns {Promise<Object>} Map of userTicker -> { fmpSymbol, name, exchange }
+ */
+export const batchResolveSymbols = async (tickers, apiKey) => {
+  const results = {};
+
+  for (const ticker of tickers) {
+    const resolved = await resolveSymbol(ticker, apiKey);
+    if (resolved) {
+      results[ticker] = resolved;
+    }
+    // Small delay to avoid rate limiting (1 API call per symbol)
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  return results;
 };

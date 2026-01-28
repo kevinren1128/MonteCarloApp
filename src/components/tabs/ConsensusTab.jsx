@@ -1,8 +1,9 @@
 /**
- * Consensus Tab - Enhanced Fundamental Analysis View
+ * Consensus Tab - Professional Fundamental Analysis View
  *
  * @module components/tabs/ConsensusTab
- * @description Comprehensive analyst estimates, price targets, ratings, and growth metrics
+ * @description Comprehensive analyst estimates, valuations, profitability, and financial health metrics
+ * Designed for professional generalist analysts with high information density
  */
 
 import React, { useState, useEffect, useCallback, memo, useMemo } from 'react';
@@ -26,41 +27,39 @@ const COLORS = {
 
 const FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif';
 
-// Reusable Card component
-const Card = memo(({ children, gradient = false, style = {} }) => (
-  <div
-    style={{
-      background: gradient
-        ? 'linear-gradient(135deg, rgba(0, 212, 255, 0.03) 0%, rgba(123, 47, 247, 0.03) 100%)'
-        : 'rgba(255, 255, 255, 0.02)',
-      borderRadius: '12px',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      padding: '16px',
-      ...style,
-    }}
-  >
-    {children}
-  </div>
-));
-
-// Format large numbers compactly
+// Format helpers
 const formatNumber = (num, decimals = 0) => {
   if (num === null || num === undefined || isNaN(num)) return '—';
   if (Math.abs(num) >= 1e12) return `$${(num / 1e12).toFixed(1)}T`;
   if (Math.abs(num) >= 1e9) return `$${(num / 1e9).toFixed(1)}B`;
   if (Math.abs(num) >= 1e6) return `$${(num / 1e6).toFixed(1)}M`;
+  if (Math.abs(num) >= 1e3) return `$${(num / 1e3).toFixed(1)}K`;
   return `$${num.toLocaleString(undefined, { maximumFractionDigits: decimals })}`;
 };
 
-// Format percentage
-const formatPercent = (num, showSign = false) => {
+const formatPct = (num, showSign = false) => {
   if (num === null || num === undefined || isNaN(num)) return '—';
   const pct = (num * 100).toFixed(1);
   if (showSign && num > 0) return `+${pct}%`;
   return `${pct}%`;
 };
 
-// Check if consensus data has valid analyst estimates
+const formatMult = (num) => {
+  if (num === null || num === undefined || isNaN(num) || !isFinite(num)) return '—';
+  if (num < 0) return 'NM';
+  return `${num.toFixed(1)}x`;
+};
+
+const formatRatio = (num, decimals = 1) => {
+  if (num === null || num === undefined || isNaN(num)) return '—';
+  return num.toFixed(decimals);
+};
+
+const calcGrowth = (current, next) => {
+  if (!current || !next || current === 0) return null;
+  return (next - current) / Math.abs(current);
+};
+
 const hasValidEstimates = (data) => {
   if (!data) return false;
   const fy1Rev = data.fy1?.revenue || 0;
@@ -68,234 +67,114 @@ const hasValidEstimates = (data) => {
   return fy1Rev > 0 || fy1Eps !== 0;
 };
 
-// Format multiple
-const formatMultiple = (num) => {
-  if (num === null || num === undefined || isNaN(num) || !isFinite(num)) return '—';
-  if (num < 0) return '—';
-  return `${num.toFixed(1)}x`;
-};
-
-// Calculate growth rate
-const calcGrowth = (current, next) => {
-  if (!current || !next || current === 0) return null;
-  return (next - current) / Math.abs(current);
-};
-
-// Format growth with arrow
-const formatGrowth = (growth) => {
-  if (growth === null || growth === undefined || isNaN(growth)) return '—';
-  const pct = (growth * 100).toFixed(0);
-  const arrow = growth > 0 ? '↑' : growth < 0 ? '↓' : '→';
-  return `${arrow}${Math.abs(pct)}%`;
-};
-
-// Get color for growth
-const getGrowthColor = (growth) => {
-  if (growth === null || growth === undefined || isNaN(growth)) return 'rgba(255,255,255,0.4)';
-  if (growth > 0.15) return COLORS.green;
-  if (growth > 0) return '#7dcea0';
-  if (growth > -0.1) return COLORS.orange;
-  return COLORS.red;
-};
-
-// Get fiscal year label
 const getFyLabel = (fiscalYear) => {
   if (!fiscalYear) return '—';
   return `FY${String(fiscalYear).slice(-2)}`;
 };
 
-// Color for margin
-const getMarginColor = (margin, thresholds = { good: 0.2, ok: 0.1 }) => {
-  if (margin === null || margin === undefined || isNaN(margin)) return 'rgba(255,255,255,0.4)';
-  if (margin >= thresholds.good) return COLORS.green;
-  if (margin >= thresholds.ok) return COLORS.gold;
-  if (margin >= 0) return COLORS.orange;
+// Color functions
+const getGrowthColor = (g) => {
+  if (g === null || g === undefined) return 'rgba(255,255,255,0.4)';
+  if (g > 0.2) return COLORS.green;
+  if (g > 0.05) return '#7dcea0';
+  if (g > -0.05) return COLORS.gold;
+  if (g > -0.15) return COLORS.orange;
   return COLORS.red;
 };
 
-// Color for P/E multiple
-const getMultipleColor = (pe, thresholds = { cheap: 15, fair: 25 }) => {
-  if (pe === null || pe === undefined || isNaN(pe) || !isFinite(pe) || pe < 0) return 'rgba(255,255,255,0.4)';
+const getMarginColor = (m, thresholds = { good: 0.2, ok: 0.1 }) => {
+  if (m === null || m === undefined) return 'rgba(255,255,255,0.4)';
+  if (m >= thresholds.good) return COLORS.green;
+  if (m >= thresholds.ok) return COLORS.gold;
+  if (m >= 0) return COLORS.orange;
+  return COLORS.red;
+};
+
+const getMultColor = (pe, thresholds = { cheap: 15, fair: 25 }) => {
+  if (pe === null || pe === undefined || !isFinite(pe) || pe < 0) return 'rgba(255,255,255,0.4)';
   if (pe < thresholds.cheap) return COLORS.green;
   if (pe < thresholds.fair) return COLORS.gold;
   return COLORS.red;
 };
 
-// Rating badge component
-const RatingBadge = memo(({ rating, size = 'normal' }) => {
-  const colors = {
-    'Strong Buy': { bg: 'rgba(46, 204, 113, 0.2)', border: COLORS.green, text: COLORS.green },
-    'Buy': { bg: 'rgba(46, 204, 113, 0.15)', border: '#7dcea0', text: '#7dcea0' },
-    'Hold': { bg: 'rgba(241, 196, 15, 0.15)', border: COLORS.gold, text: COLORS.gold },
-    'Sell': { bg: 'rgba(231, 76, 60, 0.15)', border: '#e88a82', text: '#e88a82' },
-    'Strong Sell': { bg: 'rgba(231, 76, 60, 0.2)', border: COLORS.red, text: COLORS.red },
-  };
-  const style = colors[rating] || colors['Hold'];
-  const isSmall = size === 'small';
-
-  return (
-    <span style={{
-      padding: isSmall ? '2px 6px' : '3px 8px',
-      borderRadius: '4px',
-      fontSize: isSmall ? '9px' : '10px',
-      fontWeight: '600',
-      background: style.bg,
-      border: `1px solid ${style.border}`,
-      color: style.text,
-      whiteSpace: 'nowrap',
-    }}>
-      {rating}
-    </span>
-  );
-});
-
-// Price target bar component
-const PriceTargetBar = memo(({ current, low, high, target }) => {
-  if (!low || !high || !current) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>—</span>;
-
-  const range = high - low;
-  const currentPos = Math.max(0, Math.min(100, ((current - low) / range) * 100));
-  const targetPos = Math.max(0, Math.min(100, ((target - low) / range) * 100));
-  const upside = ((target - current) / current) * 100;
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '120px' }}>
-      <div style={{
-        flex: 1,
-        height: '6px',
-        background: 'rgba(255,255,255,0.1)',
-        borderRadius: '3px',
-        position: 'relative',
-      }}>
-        {/* Current price marker */}
-        <div style={{
-          position: 'absolute',
-          left: `${currentPos}%`,
-          top: '-2px',
-          width: '2px',
-          height: '10px',
-          background: COLORS.cyan,
-          borderRadius: '1px',
-        }} />
-        {/* Target marker */}
-        <div style={{
-          position: 'absolute',
-          left: `${targetPos}%`,
-          top: '-1px',
-          width: '8px',
-          height: '8px',
-          background: upside > 0 ? COLORS.green : COLORS.red,
-          borderRadius: '50%',
-          transform: 'translateX(-50%)',
-        }} />
-      </div>
-      <span style={{
-        fontSize: '10px',
-        fontWeight: '600',
-        color: upside > 0 ? COLORS.green : COLORS.red,
-        minWidth: '40px',
-        textAlign: 'right',
-      }}>
-        {upside > 0 ? '+' : ''}{upside.toFixed(0)}%
-      </span>
-    </div>
-  );
-});
-
-// Days until date
-const daysUntil = (dateStr) => {
-  if (!dateStr) return null;
-  const target = new Date(dateStr);
-  const today = new Date();
-  const diff = Math.ceil((target - today) / (1000 * 60 * 60 * 24));
-  return diff;
+const getZScoreColor = (z) => {
+  if (z === null || z === undefined) return 'rgba(255,255,255,0.4)';
+  if (z > 2.99) return COLORS.green; // Safe
+  if (z > 1.81) return COLORS.gold; // Grey zone
+  return COLORS.red; // Distress
 };
 
-// Earnings countdown badge
-const EarningsCountdown = memo(({ date }) => {
-  const days = daysUntil(date);
-  if (days === null) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>—</span>;
+const getPiotroskiColor = (p) => {
+  if (p === null || p === undefined) return 'rgba(255,255,255,0.4)';
+  if (p >= 7) return COLORS.green; // Strong
+  if (p >= 4) return COLORS.gold; // Moderate
+  return COLORS.red; // Weak
+};
 
-  let color = COLORS.cyan;
-  let text = `${days}d`;
-  if (days <= 0) {
-    color = COLORS.gold;
-    text = days === 0 ? 'Today' : 'Reported';
-  } else if (days <= 7) {
-    color = COLORS.orange;
-  } else if (days <= 14) {
-    color = COLORS.gold;
-  }
+const getUpsideColor = (u) => {
+  if (u === null || u === undefined) return 'rgba(255,255,255,0.4)';
+  if (u > 0.15) return COLORS.green;
+  if (u > 0) return '#7dcea0';
+  if (u > -0.1) return COLORS.orange;
+  return COLORS.red;
+};
 
-  return (
-    <span style={{
-      padding: '2px 6px',
-      borderRadius: '4px',
-      fontSize: '9px',
-      fontWeight: '600',
-      background: `${color}20`,
-      border: `1px solid ${color}40`,
-      color,
-    }}>
-      {text}
-    </span>
-  );
-});
-
-// Surprise indicator
-const SurpriseIndicator = memo(({ surprise, beats, misses }) => {
-  if (surprise === null || surprise === undefined) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>—</span>;
-
-  const pct = (surprise * 100).toFixed(1);
-  const isPositive = surprise > 0;
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-      <span style={{
-        fontSize: '10px',
-        color: isPositive ? COLORS.green : COLORS.red,
-        fontWeight: '600',
-      }}>
-        {isPositive ? '+' : ''}{pct}%
-      </span>
-      {beats !== undefined && misses !== undefined && (
-        <span style={{
-          fontSize: '8px',
-          color: 'rgba(255,255,255,0.4)',
-        }}>
-          ({beats}B/{misses}M)
-        </span>
-      )}
-    </div>
-  );
-});
-
-// Summary stat card
-const StatCard = memo(({ label, value, subValue, color, icon }) => (
-  <div style={{
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-    padding: '12px 16px',
-    background: 'rgba(255,255,255,0.02)',
-    borderRadius: '8px',
-    border: '1px solid rgba(255,255,255,0.05)',
-    minWidth: '120px',
+// Micro-components
+const Badge = memo(({ children, color, small }) => (
+  <span style={{
+    padding: small ? '1px 4px' : '2px 6px',
+    borderRadius: '3px',
+    fontSize: small ? '8px' : '9px',
+    fontWeight: '600',
+    background: `${color}20`,
+    border: `1px solid ${color}40`,
+    color,
+    whiteSpace: 'nowrap',
   }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-      <span style={{ fontSize: '14px' }}>{icon}</span>
-      <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>{label}</span>
-    </div>
-    <span style={{ fontSize: '18px', fontWeight: '700', color: color || '#fff' }}>{value}</span>
-    {subValue && <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>{subValue}</span>}
-  </div>
+    {children}
+  </span>
 ));
 
-// Main ConsensusTab component
-const ConsensusTab = memo(({
-  positions,
-  styles,
-}) => {
+const RatingBadge = memo(({ rating }) => {
+  const colors = {
+    'Strong Buy': COLORS.green, 'Buy': '#7dcea0',
+    'Hold': COLORS.gold, 'Sell': COLORS.orange, 'Strong Sell': COLORS.red,
+  };
+  return <Badge color={colors[rating] || COLORS.gold} small>{rating}</Badge>;
+});
+
+const ZScoreBadge = memo(({ score }) => {
+  if (score === null || score === undefined) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>—</span>;
+  const color = getZScoreColor(score);
+  const label = score > 2.99 ? 'Safe' : score > 1.81 ? 'Grey' : 'Risk';
+  return <Badge color={color} small>{score.toFixed(1)} {label}</Badge>;
+});
+
+const PiotroskiBadge = memo(({ score }) => {
+  if (score === null || score === undefined) return <span style={{ color: 'rgba(255,255,255,0.3)' }}>—</span>;
+  const color = getPiotroskiColor(score);
+  return <Badge color={color} small>{score}/9</Badge>;
+});
+
+const Cell = memo(({ value, color, sub, align = 'right' }) => (
+  <td style={{ padding: '6px 5px', fontSize: '10px', textAlign: align, verticalAlign: 'middle' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: align === 'right' ? 'flex-end' : 'flex-start' }}>
+      <span style={{ color: color || 'rgba(255,255,255,0.85)', fontWeight: color ? '600' : '400' }}>{value}</span>
+      {sub && <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>{sub}</span>}
+    </div>
+  </td>
+));
+
+// View tabs
+const VIEW_TABS = [
+  { id: 'estimates', label: 'Estimates', icon: '📊' },
+  { id: 'valuation', label: 'Valuation', icon: '💰' },
+  { id: 'profitability', label: 'Profitability', icon: '📈' },
+  { id: 'health', label: 'Health', icon: '🏥' },
+];
+
+// Main Component
+const ConsensusTab = memo(({ positions, styles }) => {
   const [consensusData, setConsensusData] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -304,12 +183,13 @@ const ConsensusTab = memo(({
   const [isValidatingKey, setIsValidatingKey] = useState(false);
   const [keyError, setKeyError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
+  const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0, ticker: '' });
   const [sortBy, setSortBy] = useState('ticker');
   const [sortDir, setSortDir] = useState('asc');
+  const [viewTab, setViewTab] = useState('estimates');
   const [expandedRows, setExpandedRows] = useState(new Set());
 
-  // Load API key on mount
+  // Load API key
   useEffect(() => {
     const savedKey = getApiKey();
     if (savedKey) {
@@ -318,517 +198,462 @@ const ConsensusTab = memo(({
     }
   }, []);
 
-  // Get unique tickers from ALL positions
-  const tickers = [...new Set(
-    positions
-      .map(p => p.ticker?.toUpperCase())
-      .filter(t => t && t.length > 0)
-  )];
-
-  // Filter to positions with valid estimates
+  // Tickers
+  const tickers = [...new Set(positions.map(p => p.ticker?.toUpperCase()).filter(Boolean))];
   const tickersWithData = tickers.filter(t => hasValidEstimates(consensusData[t]));
   const tickersWithoutData = tickers.filter(t => consensusData[t] && !hasValidEstimates(consensusData[t]));
 
-  // Validate and save API key
+  // API key handlers
   const handleSaveApiKey = async () => {
-    if (!apiKeyInput.trim()) {
-      setKeyError('Please enter an API key');
-      return;
-    }
+    if (!apiKeyInput.trim()) { setKeyError('Enter API key'); return; }
     setIsValidatingKey(true);
     setKeyError(null);
-
     try {
-      const isValid = await validateApiKey(apiKeyInput.trim());
-      if (isValid) {
+      if (await validateApiKey(apiKeyInput.trim())) {
         setApiKey(apiKeyInput.trim());
         saveApiKey(apiKeyInput.trim());
-        setKeyError(null);
       } else {
-        setKeyError('Invalid API key');
+        setKeyError('Invalid key');
       }
-    } catch (err) {
-      setKeyError('Failed to validate API key');
-    }
+    } catch { setKeyError('Validation failed'); }
     setIsValidatingKey(false);
   };
 
   // Fetch data
   const handleFetchData = useCallback(async () => {
-    if (!apiKey || tickers.length === 0) return;
-
+    if (!apiKey || !tickers.length) return;
     setIsLoading(true);
     setError(null);
-    setLoadingProgress({ current: 0, total: tickers.length });
-
+    setLoadingProgress({ current: 0, total: tickers.length, ticker: '' });
     try {
-      const data = await batchFetchConsensusData(
-        tickers,
-        apiKey,
-        (current, total) => setLoadingProgress({ current, total })
+      const data = await batchFetchConsensusData(tickers, apiKey, (current, total, ticker) =>
+        setLoadingProgress({ current, total, ticker })
       );
       setConsensusData(data);
       setLastUpdated(new Date());
-    } catch (err) {
-      setError(err.message || 'Failed to fetch data');
-    }
+    } catch (err) { setError(err.message); }
     setIsLoading(false);
   }, [apiKey, tickers]);
 
-  // Sort data
+  // Sorting
   const sortedData = useMemo(() => {
     return [...tickers]
-      .map(ticker => consensusData[ticker])
-      .filter(data => hasValidEstimates(data))
+      .map(t => consensusData[t])
+      .filter(hasValidEstimates)
       .sort((a, b) => {
         let aVal, bVal;
         switch (sortBy) {
           case 'ticker': aVal = a.ticker; bVal = b.ticker; break;
           case 'price': aVal = a.price || 0; bVal = b.price || 0; break;
-          case 'upside': aVal = a.priceTargets?.upside || -999; bVal = b.priceTargets?.upside || -999; break;
+          case 'upside': aVal = a.priceTargets?.upside ?? -999; bVal = b.priceTargets?.upside ?? -999; break;
           case 'revenue': aVal = a.fy1?.revenue || 0; bVal = b.fy1?.revenue || 0; break;
-          case 'revGrowth': aVal = calcGrowth(a.fy1?.revenue, a.fy2?.revenue) || -999; bVal = calcGrowth(b.fy1?.revenue, b.fy2?.revenue) || -999; break;
+          case 'revGrowth': aVal = calcGrowth(a.fy1?.revenue, a.fy2?.revenue) ?? -999; bVal = calcGrowth(b.fy1?.revenue, b.fy2?.revenue) ?? -999; break;
           case 'eps': aVal = a.fy1?.eps || 0; bVal = b.fy1?.eps || 0; break;
-          case 'epsGrowth': aVal = calcGrowth(a.fy1?.eps, a.fy2?.eps) || -999; bVal = calcGrowth(b.fy1?.eps, b.fy2?.eps) || -999; break;
-          case 'pe': aVal = a.multiples?.forwardPE || 999; bVal = b.multiples?.forwardPE || 999; break;
+          case 'epsGrowth': aVal = calcGrowth(a.fy1?.eps, a.fy2?.eps) ?? -999; bVal = calcGrowth(b.fy1?.eps, b.fy2?.eps) ?? -999; break;
+          case 'pe': aVal = a.multiples?.forwardPE ?? 999; bVal = b.multiples?.forwardPE ?? 999; break;
+          case 'evEbitda': aVal = a.multiples?.evToEbitda ?? 999; bVal = b.multiples?.evToEbitda ?? 999; break;
+          case 'roe': aVal = a.profitability?.roe ?? -999; bVal = b.profitability?.roe ?? -999; break;
+          case 'zScore': aVal = a.health?.altmanZScore ?? -999; bVal = b.health?.altmanZScore ?? -999; break;
+          case 'piotroski': aVal = a.health?.piotroskiScore ?? -999; bVal = b.health?.piotroskiScore ?? -999; break;
           default: aVal = a.ticker; bVal = b.ticker;
         }
-        if (typeof aVal === 'string') {
-          return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-        }
+        if (typeof aVal === 'string') return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
         return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
       });
   }, [tickers, consensusData, sortBy, sortDir]);
 
-  // Handle sort
-  const handleSort = (column) => {
-    if (sortBy === column) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(column);
-      setSortDir('asc');
-    }
+  const handleSort = (col) => {
+    if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortBy(col); setSortDir('asc'); }
   };
 
-  // Toggle row expansion
-  const toggleRow = (ticker) => {
-    setExpandedRows(prev => {
-      const next = new Set(prev);
-      if (next.has(ticker)) next.delete(ticker);
-      else next.add(ticker);
-      return next;
+  const toggleRow = (ticker) => setExpandedRows(prev => {
+    const next = new Set(prev);
+    next.has(ticker) ? next.delete(ticker) : next.add(ticker);
+    return next;
+  });
+
+  // Summary stats
+  const stats = useMemo(() => {
+    if (!sortedData.length) return null;
+    let buyCount = 0, holdCount = 0, sellCount = 0, upsideSum = 0, upsideN = 0;
+    let avgZScore = 0, zN = 0, avgPiotroski = 0, pN = 0;
+
+    sortedData.forEach(r => {
+      if (r.ratings) {
+        buyCount += (r.ratings.strongBuy || 0) + (r.ratings.buy || 0);
+        holdCount += r.ratings.hold || 0;
+        sellCount += (r.ratings.sell || 0) + (r.ratings.strongSell || 0);
+      }
+      if (r.priceTargets?.upside != null) { upsideSum += r.priceTargets.upside; upsideN++; }
+      if (r.health?.altmanZScore != null) { avgZScore += r.health.altmanZScore; zN++; }
+      if (r.health?.piotroskiScore != null) { avgPiotroski += r.health.piotroskiScore; pN++; }
     });
-  };
-
-  // Calculate aggregate stats
-  const aggregateStats = useMemo(() => {
-    if (sortedData.length === 0) return null;
-
-    let totalBuy = 0, totalHold = 0, totalSell = 0;
-    let upsideSum = 0, upsideCount = 0;
-    let upcomingEarnings = [];
-
-    sortedData.forEach(row => {
-      if (row.ratings) {
-        totalBuy += (row.ratings.strongBuy || 0) + (row.ratings.buy || 0);
-        totalHold += row.ratings.hold || 0;
-        totalSell += (row.ratings.sell || 0) + (row.ratings.strongSell || 0);
-      }
-      if (row.priceTargets?.upside != null) {
-        upsideSum += row.priceTargets.upside;
-        upsideCount++;
-      }
-      if (row.earnings?.nextDate) {
-        const days = daysUntil(row.earnings.nextDate);
-        if (days !== null && days >= 0 && days <= 30) {
-          upcomingEarnings.push({ ticker: row.ticker, days, date: row.earnings.nextDate });
-        }
-      }
-    });
-
-    upcomingEarnings.sort((a, b) => a.days - b.days);
 
     return {
-      totalBuy,
-      totalHold,
-      totalSell,
-      avgUpside: upsideCount > 0 ? upsideSum / upsideCount : null,
-      upcomingEarnings: upcomingEarnings.slice(0, 3),
-      stockCount: sortedData.length,
+      buyPct: buyCount + holdCount + sellCount > 0 ? buyCount / (buyCount + holdCount + sellCount) : null,
+      avgUpside: upsideN > 0 ? upsideSum / upsideN : null,
+      avgZScore: zN > 0 ? avgZScore / zN : null,
+      avgPiotroski: pN > 0 ? avgPiotroski / pN : null,
+      count: sortedData.length,
     };
   }, [sortedData]);
 
   // Styles
   const thStyle = {
-    padding: '8px 6px',
-    textAlign: 'left',
-    fontSize: '10px',
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.6)',
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    userSelect: 'none',
+    padding: '6px 5px', textAlign: 'left', fontSize: '9px', fontWeight: '600',
+    color: 'rgba(255,255,255,0.5)', borderBottom: '1px solid rgba(255,255,255,0.08)',
+    cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
   };
 
-  const tdStyle = {
-    padding: '8px 6px',
-    fontSize: '11px',
-    color: 'rgba(255,255,255,0.85)',
-    verticalAlign: 'middle',
-  };
+  const SortIcon = ({ col }) => sortBy === col ? <span style={{ opacity: 0.7, marginLeft: '2px' }}>{sortDir === 'asc' ? '↑' : '↓'}</span> : null;
 
-  const SortIndicator = ({ column }) => {
-    if (sortBy !== column) return null;
-    return <span style={{ marginLeft: '2px', opacity: 0.7 }}>{sortDir === 'asc' ? '↑' : '↓'}</span>;
-  };
-
-  // No API key state
+  // No API key
   if (!apiKey) {
     return (
       <div style={{ padding: '40px', display: 'flex', justifyContent: 'center' }}>
-        <Card style={{ maxWidth: '400px', textAlign: 'center' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔑</div>
-          <h3 style={{ margin: '0 0 8px', color: '#fff', fontSize: '16px' }}>FMP API Key Required</h3>
-          <p style={{ margin: '0 0 20px', color: 'rgba(255,255,255,0.5)', fontSize: '12px' }}>
-            Get your free API key from <a href="https://financialmodelingprep.com" target="_blank" rel="noopener noreferrer" style={{ color: COLORS.cyan }}>financialmodelingprep.com</a>
+        <div style={{ maxWidth: '380px', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', padding: '24px', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ fontSize: '40px', marginBottom: '12px' }}>🔑</div>
+          <h3 style={{ margin: '0 0 8px', color: '#fff', fontSize: '15px' }}>FMP API Key Required</h3>
+          <p style={{ margin: '0 0 16px', color: 'rgba(255,255,255,0.5)', fontSize: '11px' }}>
+            Get your key from <a href="https://financialmodelingprep.com" target="_blank" rel="noopener noreferrer" style={{ color: COLORS.cyan }}>financialmodelingprep.com</a>
           </p>
           <div style={{ display: 'flex', gap: '8px' }}>
-            <input
-              type="password"
-              value={apiKeyInput}
-              onChange={(e) => setApiKeyInput(e.target.value)}
-              placeholder="Enter API key..."
-              style={{
-                flex: 1,
-                padding: '10px 12px',
-                background: 'rgba(0,0,0,0.3)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: '6px',
-                color: '#fff',
-                fontSize: '12px',
-                fontFamily: FONT_FAMILY,
-              }}
-              onKeyPress={(e) => e.key === 'Enter' && handleSaveApiKey()}
+            <input type="password" value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)}
+              placeholder="API key..." onKeyPress={(e) => e.key === 'Enter' && handleSaveApiKey()}
+              style={{ flex: 1, padding: '8px 10px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: '#fff', fontSize: '11px', fontFamily: FONT_FAMILY }}
             />
-            <button
-              onClick={handleSaveApiKey}
-              disabled={isValidatingKey}
-              style={{
-                padding: '10px 16px',
-                background: 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)',
-                border: 'none',
-                borderRadius: '6px',
-                color: '#fff',
-                fontSize: '12px',
-                fontWeight: '600',
-                cursor: 'pointer',
-              }}
-            >
+            <button onClick={handleSaveApiKey} disabled={isValidatingKey}
+              style={{ padding: '8px 14px', background: 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)', border: 'none', borderRadius: '6px', color: '#fff', fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}>
               {isValidatingKey ? '...' : 'Save'}
             </button>
           </div>
-          {keyError && <p style={{ margin: '12px 0 0', color: COLORS.red, fontSize: '11px' }}>{keyError}</p>}
-        </Card>
+          {keyError && <p style={{ margin: '10px 0 0', color: COLORS.red, fontSize: '10px' }}>{keyError}</p>}
+        </div>
       </div>
     );
   }
 
-  // No positions state
-  if (tickers.length === 0) {
-    return (
-      <div style={{ padding: '40px', textAlign: 'center' }}>
-        <p style={{ color: 'rgba(255,255,255,0.5)' }}>Add positions to see consensus estimates</p>
-      </div>
-    );
+  // No positions
+  if (!tickers.length) {
+    return <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.5)' }}>Add positions to see consensus estimates</div>;
   }
+
+  // Column definitions by view
+  const renderTableHead = () => {
+    const common = [
+      <th key="ticker" onClick={() => handleSort('ticker')} style={{ ...thStyle, position: 'sticky', left: 0, background: 'rgba(12,14,24,0.98)', zIndex: 2 }}>Ticker<SortIcon col="ticker" /></th>,
+      <th key="price" onClick={() => handleSort('price')} style={{ ...thStyle, textAlign: 'right' }}>Price<SortIcon col="price" /></th>,
+      <th key="upside" onClick={() => handleSort('upside')} style={{ ...thStyle, textAlign: 'right' }}>Target<SortIcon col="upside" /></th>,
+      <th key="rating" style={{ ...thStyle, textAlign: 'center' }}>Rating</th>,
+    ];
+
+    if (viewTab === 'estimates') {
+      return [...common,
+        <th key="rev" onClick={() => handleSort('revenue')} style={{ ...thStyle, textAlign: 'right' }}>Revenue<SortIcon col="revenue" /></th>,
+        <th key="revG" onClick={() => handleSort('revGrowth')} style={{ ...thStyle, textAlign: 'right' }}>Rev Gr<SortIcon col="revGrowth" /></th>,
+        <th key="eps" onClick={() => handleSort('eps')} style={{ ...thStyle, textAlign: 'right' }}>EPS<SortIcon col="eps" /></th>,
+        <th key="epsG" onClick={() => handleSort('epsGrowth')} style={{ ...thStyle, textAlign: 'right' }}>EPS Gr<SortIcon col="epsGrowth" /></th>,
+        <th key="ebit" style={{ ...thStyle, textAlign: 'right' }}>EBIT%</th>,
+        <th key="net" style={{ ...thStyle, textAlign: 'right' }}>Net%</th>,
+        <th key="earn" style={{ ...thStyle, textAlign: 'center' }}>Earnings</th>,
+        <th key="surp" style={{ ...thStyle, textAlign: 'center' }}>Surprise</th>,
+      ];
+    }
+
+    if (viewTab === 'valuation') {
+      return [...common,
+        <th key="pe" onClick={() => handleSort('pe')} style={{ ...thStyle, textAlign: 'right' }}>Fwd P/E<SortIcon col="pe" /></th>,
+        <th key="evE" onClick={() => handleSort('evEbitda')} style={{ ...thStyle, textAlign: 'right' }}>EV/EBITDA<SortIcon col="evEbitda" /></th>,
+        <th key="evEbit" style={{ ...thStyle, textAlign: 'right' }}>EV/EBIT</th>,
+        <th key="ps" style={{ ...thStyle, textAlign: 'right' }}>P/S</th>,
+        <th key="pfcf" style={{ ...thStyle, textAlign: 'right' }}>P/FCF</th>,
+        <th key="pb" style={{ ...thStyle, textAlign: 'right' }}>P/B</th>,
+        <th key="divY" style={{ ...thStyle, textAlign: 'right' }}>Div Yld</th>,
+        <th key="fcfY" style={{ ...thStyle, textAlign: 'right' }}>FCF Yld</th>,
+      ];
+    }
+
+    if (viewTab === 'profitability') {
+      return [...common,
+        <th key="gm" style={{ ...thStyle, textAlign: 'right' }}>Gross%</th>,
+        <th key="om" style={{ ...thStyle, textAlign: 'right' }}>EBIT%</th>,
+        <th key="nm" style={{ ...thStyle, textAlign: 'right' }}>Net%</th>,
+        <th key="roe" onClick={() => handleSort('roe')} style={{ ...thStyle, textAlign: 'right' }}>ROE<SortIcon col="roe" /></th>,
+        <th key="roa" style={{ ...thStyle, textAlign: 'right' }}>ROA</th>,
+        <th key="roic" style={{ ...thStyle, textAlign: 'right' }}>ROIC</th>,
+        <th key="revHG" style={{ ...thStyle, textAlign: 'right' }}>Rev 3Y</th>,
+        <th key="epsHG" style={{ ...thStyle, textAlign: 'right' }}>EPS 3Y</th>,
+      ];
+    }
+
+    if (viewTab === 'health') {
+      return [...common,
+        <th key="zScore" onClick={() => handleSort('zScore')} style={{ ...thStyle, textAlign: 'center' }}>Z-Score<SortIcon col="zScore" /></th>,
+        <th key="piotr" onClick={() => handleSort('piotroski')} style={{ ...thStyle, textAlign: 'center' }}>Piotroski<SortIcon col="piotroski" /></th>,
+        <th key="de" style={{ ...thStyle, textAlign: 'right' }}>D/E</th>,
+        <th key="curr" style={{ ...thStyle, textAlign: 'right' }}>Current</th>,
+        <th key="quick" style={{ ...thStyle, textAlign: 'right' }}>Quick</th>,
+        <th key="intCov" style={{ ...thStyle, textAlign: 'right' }}>Int Cov</th>,
+        <th key="payout" style={{ ...thStyle, textAlign: 'right' }}>Payout%</th>,
+        <th key="fcfps" style={{ ...thStyle, textAlign: 'right' }}>FCF/Sh</th>,
+      ];
+    }
+
+    return common;
+  };
+
+  const renderTableRow = (row) => {
+    const revGrowth = calcGrowth(row.fy1?.revenue, row.fy2?.revenue);
+    const epsGrowth = calcGrowth(row.fy1?.eps, row.fy2?.eps);
+    const upside = row.priceTargets?.upside;
+    const isExpanded = expandedRows.has(row.ticker);
+
+    const tickerCell = (
+      <td key="ticker" style={{ padding: '6px 5px', fontSize: '10px', position: 'sticky', left: 0, background: isExpanded ? 'rgba(12,14,24,0.98)' : 'rgba(12,14,24,0.95)', zIndex: 1 }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <span style={{ fontWeight: '600', color: COLORS.cyan, cursor: 'pointer' }} onClick={() => toggleRow(row.ticker)}>
+              {isExpanded ? '▼' : '▶'} {row.ticker}
+            </span>
+            {row.fmpSymbol && row.fmpSymbol !== row.ticker && (
+              <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.3)' }}>→{row.fmpSymbol}</span>
+            )}
+          </div>
+          <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
+        </div>
+      </td>
+    );
+
+    const priceCell = <Cell key="price" value={`$${row.price?.toFixed(2) || '—'}`} color={row.changesPercentage >= 0 ? COLORS.green : COLORS.red} />;
+
+    const upsideCell = (
+      <td key="upside" style={{ padding: '6px 5px', fontSize: '10px', textAlign: 'right' }}>
+        {upside != null ? (
+          <span style={{ color: getUpsideColor(upside), fontWeight: '600' }}>
+            {upside > 0 ? '+' : ''}{(upside * 100).toFixed(0)}%
+          </span>
+        ) : '—'}
+      </td>
+    );
+
+    const ratingCell = (
+      <td key="rating" style={{ padding: '6px 5px', textAlign: 'center' }}>
+        {row.ratings?.consensus ? <RatingBadge rating={row.ratings.consensus} /> : '—'}
+      </td>
+    );
+
+    const common = [tickerCell, priceCell, upsideCell, ratingCell];
+
+    if (viewTab === 'estimates') {
+      return [...common,
+        <Cell key="rev" value={formatNumber(row.fy1?.revenue)} sub={getFyLabel(row.fy1?.fiscalYear)} />,
+        <Cell key="revG" value={revGrowth != null ? `${revGrowth > 0 ? '+' : ''}${(revGrowth * 100).toFixed(0)}%` : '—'} color={getGrowthColor(revGrowth)} />,
+        <Cell key="eps" value={row.fy1?.eps != null ? `$${row.fy1.eps.toFixed(2)}` : '—'} sub={getFyLabel(row.fy1?.fiscalYear)} />,
+        <Cell key="epsG" value={epsGrowth != null ? `${epsGrowth > 0 ? '+' : ''}${(epsGrowth * 100).toFixed(0)}%` : '—'} color={getGrowthColor(epsGrowth)} />,
+        <Cell key="ebit" value={formatPct(row.fy1?.ebitMargin)} color={getMarginColor(row.fy1?.ebitMargin)} />,
+        <Cell key="net" value={formatPct(row.fy1?.netMargin)} color={getMarginColor(row.fy1?.netMargin, { good: 0.15, ok: 0.05 })} />,
+        <td key="earn" style={{ padding: '6px 5px', textAlign: 'center', fontSize: '10px' }}>
+          {row.earnings?.nextDate ? (
+            <Badge color={COLORS.cyan} small>{row.earnings.nextDate.slice(5)}</Badge>
+          ) : '—'}
+        </td>,
+        <td key="surp" style={{ padding: '6px 5px', textAlign: 'center', fontSize: '10px' }}>
+          {row.earnings?.avgSurprise != null ? (
+            <span style={{ color: row.earnings.avgSurprise > 0 ? COLORS.green : COLORS.red, fontWeight: '600' }}>
+              {row.earnings.avgSurprise > 0 ? '+' : ''}{(row.earnings.avgSurprise * 100).toFixed(0)}%
+              <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)', marginLeft: '2px' }}>({row.earnings.beatCount}B/{row.earnings.missCount}M)</span>
+            </span>
+          ) : '—'}
+        </td>,
+      ];
+    }
+
+    if (viewTab === 'valuation') {
+      return [...common,
+        <Cell key="pe" value={formatMult(row.multiples?.forwardPE)} color={getMultColor(row.multiples?.forwardPE)} />,
+        <Cell key="evE" value={formatMult(row.multiples?.evToEbitda)} color={getMultColor(row.multiples?.evToEbitda, { cheap: 10, fair: 15 })} />,
+        <Cell key="evEbit" value={formatMult(row.multiples?.evToEbit)} />,
+        <Cell key="ps" value={formatMult(row.multiples?.priceToSales)} />,
+        <Cell key="pfcf" value={formatMult(row.cashFlow?.priceToFCF)} />,
+        <Cell key="pb" value={formatMult(row.historical?.pbRatio)} />,
+        <Cell key="divY" value={row.cashFlow?.dividendYield != null ? formatPct(row.cashFlow.dividendYield) : '—'} color={row.cashFlow?.dividendYield > 0.02 ? COLORS.green : undefined} />,
+        <Cell key="fcfY" value={row.profitability?.freeCashFlowYield != null ? formatPct(row.profitability.freeCashFlowYield) : '—'} color={row.profitability?.freeCashFlowYield > 0.05 ? COLORS.green : undefined} />,
+      ];
+    }
+
+    if (viewTab === 'profitability') {
+      return [...common,
+        <Cell key="gm" value={formatPct(row.historical?.grossMargin)} color={getMarginColor(row.historical?.grossMargin, { good: 0.4, ok: 0.2 })} />,
+        <Cell key="om" value={formatPct(row.historical?.operatingMargin)} color={getMarginColor(row.historical?.operatingMargin)} />,
+        <Cell key="nm" value={formatPct(row.historical?.netMargin)} color={getMarginColor(row.historical?.netMargin, { good: 0.15, ok: 0.05 })} />,
+        <Cell key="roe" value={formatPct(row.profitability?.roe)} color={getMarginColor(row.profitability?.roe, { good: 0.15, ok: 0.08 })} />,
+        <Cell key="roa" value={formatPct(row.profitability?.roa)} color={getMarginColor(row.profitability?.roa, { good: 0.08, ok: 0.03 })} />,
+        <Cell key="roic" value={formatPct(row.profitability?.roic)} color={getMarginColor(row.profitability?.roic, { good: 0.12, ok: 0.06 })} />,
+        <Cell key="revHG" value={row.growth?.revenue != null ? formatPct(row.growth.revenue, true) : '—'} color={getGrowthColor(row.growth?.revenue)} />,
+        <Cell key="epsHG" value={row.growth?.eps != null ? formatPct(row.growth.eps, true) : '—'} color={getGrowthColor(row.growth?.eps)} />,
+      ];
+    }
+
+    if (viewTab === 'health') {
+      return [...common,
+        <td key="zScore" style={{ padding: '6px 5px', textAlign: 'center' }}><ZScoreBadge score={row.health?.altmanZScore} /></td>,
+        <td key="piotr" style={{ padding: '6px 5px', textAlign: 'center' }}><PiotroskiBadge score={row.health?.piotroskiScore} /></td>,
+        <Cell key="de" value={formatRatio(row.health?.debtToEquity)} color={row.health?.debtToEquity > 2 ? COLORS.red : row.health?.debtToEquity > 1 ? COLORS.orange : COLORS.green} />,
+        <Cell key="curr" value={formatRatio(row.health?.currentRatio)} color={row.health?.currentRatio > 1.5 ? COLORS.green : row.health?.currentRatio > 1 ? COLORS.gold : COLORS.red} />,
+        <Cell key="quick" value={formatRatio(row.health?.quickRatio)} />,
+        <Cell key="intCov" value={formatRatio(row.health?.interestCoverage)} color={row.health?.interestCoverage > 5 ? COLORS.green : row.health?.interestCoverage > 2 ? COLORS.gold : COLORS.red} />,
+        <Cell key="payout" value={formatPct(row.cashFlow?.payoutRatio)} color={row.cashFlow?.payoutRatio > 0.8 ? COLORS.red : row.cashFlow?.payoutRatio > 0.6 ? COLORS.orange : undefined} />,
+        <Cell key="fcfps" value={row.cashFlow?.freeCashFlowPerShare != null ? `$${row.cashFlow.freeCashFlowPerShare.toFixed(2)}` : '—'} />,
+      ];
+    }
+
+    return common;
+  };
+
+  const renderExpandedRow = (row) => {
+    if (!expandedRows.has(row.ticker)) return null;
+    const colSpan = viewTab === 'estimates' ? 12 : viewTab === 'valuation' ? 12 : viewTab === 'profitability' ? 12 : 12;
+
+    return (
+      <tr key={`${row.ticker}-exp`}>
+        <td colSpan={colSpan} style={{ padding: '10px 14px', background: 'rgba(0,212,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', fontSize: '10px' }}>
+            {/* FY2 Estimates */}
+            <div>
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>{getFyLabel(row.fy2?.fiscalYear)} Est</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Rev: {formatNumber(row.fy2?.revenue)}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>EPS: ${row.fy2?.eps?.toFixed(2) || '—'}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>EBITDA: {formatNumber(row.fy2?.ebitda)}</div>
+            </div>
+            {/* Price Targets */}
+            <div>
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Price Targets</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Low: ${row.priceTargets?.low?.toFixed(2) || '—'}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Consensus: ${row.priceTargets?.consensus?.toFixed(2) || '—'}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>High: ${row.priceTargets?.high?.toFixed(2) || '—'}</div>
+            </div>
+            {/* Ratings Breakdown */}
+            <div>
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Ratings ({row.ratings?.totalAnalysts || 0})</div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {row.ratings?.strongBuy > 0 && <span style={{ color: COLORS.green }}>SB:{row.ratings.strongBuy}</span>}
+                {row.ratings?.buy > 0 && <span style={{ color: '#7dcea0' }}>B:{row.ratings.buy}</span>}
+                {row.ratings?.hold > 0 && <span style={{ color: COLORS.gold }}>H:{row.ratings.hold}</span>}
+                {row.ratings?.sell > 0 && <span style={{ color: COLORS.orange }}>S:{row.ratings.sell}</span>}
+                {row.ratings?.strongSell > 0 && <span style={{ color: COLORS.red }}>SS:{row.ratings.strongSell}</span>}
+              </div>
+            </div>
+            {/* Historical Growth */}
+            <div>
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>3Y Growth Avg</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Revenue: <span style={{ color: getGrowthColor(row.growth?.revenue) }}>{formatPct(row.growth?.revenue, true)}</span></div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>EPS: <span style={{ color: getGrowthColor(row.growth?.eps) }}>{formatPct(row.growth?.eps, true)}</span></div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Net Inc: <span style={{ color: getGrowthColor(row.growth?.netIncome) }}>{formatPct(row.growth?.netIncome, true)}</span></div>
+            </div>
+            {/* Financial Health */}
+            <div>
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Health Scores</div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <span style={{ color: 'rgba(255,255,255,0.5)' }}>Z:</span><ZScoreBadge score={row.health?.altmanZScore} />
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px' }}>
+                <span style={{ color: 'rgba(255,255,255,0.5)' }}>P:</span><PiotroskiBadge score={row.health?.piotroskiScore} />
+              </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+    );
+  };
 
   return (
-    <div style={{ padding: '20px', fontFamily: FONT_FAMILY }}>
+    <div style={{ padding: '16px', fontFamily: FONT_FAMILY }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '700', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            📊 Consensus Estimates
-          </h2>
-          <p style={{ margin: '4px 0 0', fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>
-            {tickers.length} positions • {tickersWithData.length} with estimates
-            {tickersWithoutData.length > 0 && ` • ${tickersWithoutData.length} ETFs/no coverage`}
-            {lastUpdated && ` • Updated ${lastUpdated.toLocaleTimeString()}`}
+          <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#fff' }}>📊 Consensus Estimates</h2>
+          <p style={{ margin: '3px 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>
+            {tickers.length} positions • {tickersWithData.length} with coverage • {tickersWithoutData.length} ETFs/no data
+            {lastUpdated && ` • ${lastUpdated.toLocaleTimeString()}`}
           </p>
         </div>
-        <button
-          onClick={handleFetchData}
-          disabled={isLoading}
-          style={{
-            padding: '10px 20px',
-            background: isLoading ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)',
-            border: 'none',
-            borderRadius: '8px',
-            color: '#fff',
-            fontSize: '12px',
-            fontWeight: '600',
-            cursor: isLoading ? 'wait' : 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          {isLoading ? (
-            <>
-              <span style={{ animation: 'spin 1s linear infinite' }}>⏳</span>
-              Loading {loadingProgress.current}/{loadingProgress.total}...
-            </>
-          ) : (
-            <>🔄 Load Estimates</>
-          )}
+        <button onClick={handleFetchData} disabled={isLoading}
+          style={{ padding: '8px 16px', background: isLoading ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)', border: 'none', borderRadius: '6px', color: '#fff', fontSize: '11px', fontWeight: '600', cursor: isLoading ? 'wait' : 'pointer' }}>
+          {isLoading ? `⏳ ${loadingProgress.current}/${loadingProgress.total} ${loadingProgress.ticker}` : '🔄 Load Data'}
         </button>
       </div>
 
-      {/* Error display */}
-      {error && (
-        <Card style={{ marginBottom: '16px', background: 'rgba(231, 76, 60, 0.1)', borderColor: 'rgba(231, 76, 60, 0.3)' }}>
-          <p style={{ margin: 0, color: COLORS.red, fontSize: '12px' }}>⚠️ {error}</p>
-        </Card>
-      )}
+      {error && <div style={{ marginBottom: '12px', padding: '10px', background: 'rgba(231,76,60,0.1)', borderRadius: '6px', color: COLORS.red, fontSize: '11px' }}>⚠️ {error}</div>}
 
-      {/* Summary Cards */}
-      {aggregateStats && sortedData.length > 0 && (
-        <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
-          <StatCard
-            icon="📈"
-            label="Analyst Sentiment"
-            value={`${((aggregateStats.totalBuy / (aggregateStats.totalBuy + aggregateStats.totalHold + aggregateStats.totalSell)) * 100 || 0).toFixed(0)}% Buy`}
-            subValue={`${aggregateStats.totalBuy} Buy / ${aggregateStats.totalHold} Hold / ${aggregateStats.totalSell} Sell`}
-            color={aggregateStats.totalBuy > aggregateStats.totalSell ? COLORS.green : COLORS.red}
-          />
-          <StatCard
-            icon="🎯"
-            label="Avg Price Target"
-            value={aggregateStats.avgUpside != null ? `${aggregateStats.avgUpside > 0 ? '+' : ''}${(aggregateStats.avgUpside * 100).toFixed(0)}%` : '—'}
-            subValue={`Upside across ${aggregateStats.stockCount} stocks`}
-            color={aggregateStats.avgUpside > 0 ? COLORS.green : COLORS.red}
-          />
-          {aggregateStats.upcomingEarnings.length > 0 && (
-            <StatCard
-              icon="📅"
-              label="Next Earnings"
-              value={aggregateStats.upcomingEarnings[0].ticker}
-              subValue={`in ${aggregateStats.upcomingEarnings[0].days} days (${aggregateStats.upcomingEarnings[0].date})`}
-              color={COLORS.cyan}
-            />
-          )}
+      {/* Summary Stats */}
+      {stats && (
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>ANALYST SENTIMENT</div>
+            <div style={{ fontSize: '16px', fontWeight: '700', color: stats.buyPct > 0.5 ? COLORS.green : COLORS.gold }}>{stats.buyPct != null ? `${(stats.buyPct * 100).toFixed(0)}% Buy` : '—'}</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>AVG UPSIDE</div>
+            <div style={{ fontSize: '16px', fontWeight: '700', color: getUpsideColor(stats.avgUpside) }}>{stats.avgUpside != null ? `${stats.avgUpside > 0 ? '+' : ''}${(stats.avgUpside * 100).toFixed(0)}%` : '—'}</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>AVG Z-SCORE</div>
+            <div style={{ fontSize: '16px', fontWeight: '700', color: getZScoreColor(stats.avgZScore) }}>{stats.avgZScore != null ? stats.avgZScore.toFixed(1) : '—'}</div>
+          </div>
+          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>AVG PIOTROSKI</div>
+            <div style={{ fontSize: '16px', fontWeight: '700', color: getPiotroskiColor(stats.avgPiotroski) }}>{stats.avgPiotroski != null ? stats.avgPiotroski.toFixed(1) : '—'}</div>
+          </div>
         </div>
       )}
 
-      {/* Main Data Table */}
-      {sortedData.length > 0 && (
-        <Card style={{ padding: '0', overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
-              <thead>
-                <tr style={{ background: 'rgba(0,0,0,0.2)' }}>
-                  <th onClick={() => handleSort('ticker')} style={{ ...thStyle, position: 'sticky', left: 0, background: 'rgba(12,14,24,0.98)', zIndex: 1 }}>
-                    Ticker<SortIndicator column="ticker" />
-                  </th>
-                  <th onClick={() => handleSort('price')} style={{ ...thStyle, textAlign: 'right' }}>Price<SortIndicator column="price" /></th>
-                  <th onClick={() => handleSort('upside')} style={{ ...thStyle, textAlign: 'center' }}>Target<SortIndicator column="upside" /></th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>Rating</th>
-                  <th onClick={() => handleSort('revenue')} style={{ ...thStyle, textAlign: 'right' }}>Revenue<SortIndicator column="revenue" /></th>
-                  <th onClick={() => handleSort('revGrowth')} style={{ ...thStyle, textAlign: 'right' }}>Rev Grth<SortIndicator column="revGrowth" /></th>
-                  <th onClick={() => handleSort('eps')} style={{ ...thStyle, textAlign: 'right' }}>EPS<SortIndicator column="eps" /></th>
-                  <th onClick={() => handleSort('epsGrowth')} style={{ ...thStyle, textAlign: 'right' }}>EPS Grth<SortIndicator column="epsGrowth" /></th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>EBIT%</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Net%</th>
-                  <th onClick={() => handleSort('pe')} style={{ ...thStyle, textAlign: 'right' }}>Fwd P/E<SortIndicator column="pe" /></th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>EV/EBITDA</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>Earnings</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>Surprise</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedData.map(row => {
-                  const revGrowth = calcGrowth(row.fy1?.revenue, row.fy2?.revenue);
-                  const epsGrowth = calcGrowth(row.fy1?.eps, row.fy2?.eps);
-                  const isExpanded = expandedRows.has(row.ticker);
+      {/* View Tabs */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+        {VIEW_TABS.map(tab => (
+          <button key={tab.id} onClick={() => setViewTab(tab.id)}
+            style={{ padding: '6px 12px', background: viewTab === tab.id ? 'rgba(0,212,255,0.15)' : 'rgba(255,255,255,0.03)', border: viewTab === tab.id ? '1px solid rgba(0,212,255,0.3)' : '1px solid rgba(255,255,255,0.06)', borderRadius: '6px', color: viewTab === tab.id ? COLORS.cyan : 'rgba(255,255,255,0.6)', fontSize: '10px', fontWeight: '600', cursor: 'pointer' }}>
+            {tab.icon} {tab.label}
+          </button>
+        ))}
+      </div>
 
-                  return (
-                    <React.Fragment key={row.ticker}>
-                      <tr
-                        onClick={() => toggleRow(row.ticker)}
-                        style={{
-                          borderBottom: '1px solid rgba(255,255,255,0.03)',
-                          cursor: 'pointer',
-                          background: isExpanded ? 'rgba(0, 212, 255, 0.05)' : 'transparent',
-                        }}
-                      >
-                        <td style={{ ...tdStyle, position: 'sticky', left: 0, background: isExpanded ? 'rgba(12,14,24,0.98)' : 'rgba(12,14,24,0.95)', zIndex: 1 }}>
-                          <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <span style={{ fontWeight: '600', color: COLORS.cyan }}>{row.ticker}</span>
-                            <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {row.name}
-                            </span>
-                          </div>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={{ color: row.changesPercentage >= 0 ? COLORS.green : COLORS.red }}>
-                            ${row.price?.toFixed(2) || '—'}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          <PriceTargetBar
-                            current={row.price}
-                            low={row.priceTargets?.low}
-                            high={row.priceTargets?.high}
-                            target={row.priceTargets?.consensus}
-                          />
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          {row.ratings?.consensus ? (
-                            <RatingBadge rating={row.ratings.consensus} size="small" />
-                          ) : '—'}
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                            <span>{formatNumber(row.fy1?.revenue)}</span>
-                            <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>{getFyLabel(row.fy1?.fiscalYear)}</span>
-                          </div>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={{ color: getGrowthColor(revGrowth), fontWeight: '600' }}>
-                            {formatGrowth(revGrowth)}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                            <span>${row.fy1?.eps?.toFixed(2) || '—'}</span>
-                            <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>{getFyLabel(row.fy1?.fiscalYear)}</span>
-                          </div>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={{ color: getGrowthColor(epsGrowth), fontWeight: '600' }}>
-                            {formatGrowth(epsGrowth)}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={{ color: getMarginColor(row.fy1?.ebitMargin) }}>
-                            {formatPercent(row.fy1?.ebitMargin)}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={{ color: getMarginColor(row.fy1?.netMargin, { good: 0.15, ok: 0.05 }) }}>
-                            {formatPercent(row.fy1?.netMargin)}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={{ color: getMultipleColor(row.multiples?.forwardPE) }}>
-                            {formatMultiple(row.multiples?.forwardPE)}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <span style={{ color: getMultipleColor(row.multiples?.evToEbitda, { cheap: 10, fair: 15 }) }}>
-                            {formatMultiple(row.multiples?.evToEbitda)}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          <EarningsCountdown date={row.earnings?.nextDate} />
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          <SurpriseIndicator
-                            surprise={row.earnings?.avgSurprise}
-                            beats={row.earnings?.beatCount}
-                            misses={row.earnings?.missCount}
-                          />
-                        </td>
-                      </tr>
-                      {/* Expanded row with more details */}
-                      {isExpanded && (
-                        <tr>
-                          <td colSpan="14" style={{ padding: '12px 16px', background: 'rgba(0, 212, 255, 0.02)' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', fontSize: '11px' }}>
-                              {/* FY2 Estimates */}
-                              <div>
-                                <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '8px' }}>
-                                  {getFyLabel(row.fy2?.fiscalYear)} Estimates
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  <div>Revenue: {formatNumber(row.fy2?.revenue)}</div>
-                                  <div>EPS: ${row.fy2?.eps?.toFixed(2) || '—'}</div>
-                                  <div>EBITDA: {formatNumber(row.fy2?.ebitda)}</div>
-                                </div>
-                              </div>
-                              {/* Historical Growth */}
-                              <div>
-                                <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '8px' }}>
-                                  Historical Growth (3Y Avg)
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  <div>Revenue: <span style={{ color: getGrowthColor(row.growth?.revenue) }}>{formatPercent(row.growth?.revenue, true)}</span></div>
-                                  <div>EPS: <span style={{ color: getGrowthColor(row.growth?.eps) }}>{formatPercent(row.growth?.eps, true)}</span></div>
-                                  <div>Net Income: <span style={{ color: getGrowthColor(row.growth?.netIncome) }}>{formatPercent(row.growth?.netIncome, true)}</span></div>
-                                </div>
-                              </div>
-                              {/* Analyst Ratings Detail */}
-                              <div>
-                                <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '8px' }}>
-                                  Analyst Ratings ({row.ratings?.totalAnalysts || 0} analysts)
-                                </div>
-                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                  {row.ratings?.strongBuy > 0 && <span style={{ color: COLORS.green }}>Strong Buy: {row.ratings.strongBuy}</span>}
-                                  {row.ratings?.buy > 0 && <span style={{ color: '#7dcea0' }}>Buy: {row.ratings.buy}</span>}
-                                  {row.ratings?.hold > 0 && <span style={{ color: COLORS.gold }}>Hold: {row.ratings.hold}</span>}
-                                  {row.ratings?.sell > 0 && <span style={{ color: '#e88a82' }}>Sell: {row.ratings.sell}</span>}
-                                  {row.ratings?.strongSell > 0 && <span style={{ color: COLORS.red }}>Strong Sell: {row.ratings.strongSell}</span>}
-                                </div>
-                              </div>
-                              {/* Price Target Detail */}
-                              <div>
-                                <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '8px' }}>
-                                  Price Targets
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  <div>Low: ${row.priceTargets?.low?.toFixed(2) || '—'}</div>
-                                  <div>Consensus: ${row.priceTargets?.consensus?.toFixed(2) || '—'}</div>
-                                  <div>High: ${row.priceTargets?.high?.toFixed(2) || '—'}</div>
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
+      {/* Data Table */}
+      {sortedData.length > 0 && (
+        <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr style={{ background: 'rgba(0,0,0,0.2)' }}>{renderTableHead()}</tr></thead>
+              <tbody>
+                {sortedData.map(row => (
+                  <React.Fragment key={row.ticker}>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer', background: expandedRows.has(row.ticker) ? 'rgba(0,212,255,0.03)' : 'transparent' }}
+                      onClick={() => toggleRow(row.ticker)}>
+                      {renderTableRow(row)}
+                    </tr>
+                    {renderExpandedRow(row)}
+                  </React.Fragment>
+                ))}
               </tbody>
             </table>
           </div>
-        </Card>
+        </div>
       )}
 
       {/* Empty state */}
-      {sortedData.length === 0 && !isLoading && Object.keys(consensusData).length === 0 && (
-        <Card style={{ textAlign: 'center', padding: '60px 40px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
-          <h3 style={{ margin: '0 0 8px', color: '#fff', fontSize: '16px' }}>Ready to Load Estimates</h3>
-          <p style={{ margin: 0, color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
-            Click "Load Estimates" to fetch analyst data for your {tickers.length} positions
-            <br />
-            <span style={{ fontSize: '11px' }}>(~{Math.ceil(tickers.length * 0.4)} seconds, 9 API calls per stock)</span>
+      {sortedData.length === 0 && !isLoading && !Object.keys(consensusData).length && (
+        <div style={{ textAlign: 'center', padding: '50px', background: 'rgba(255,255,255,0.02)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ fontSize: '40px', marginBottom: '12px' }}>📋</div>
+          <h3 style={{ margin: '0 0 6px', color: '#fff', fontSize: '14px' }}>Ready to Load Estimates</h3>
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.5)', fontSize: '11px' }}>
+            Click "Load Data" to fetch analyst data for {tickers.length} positions<br/>
+            <span style={{ fontSize: '10px' }}>~{Math.ceil(tickers.length * 2.5)}s (11 API calls/stock)</span>
           </p>
-        </Card>
+        </div>
       )}
-
-      {/* Spinner keyframes */}
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 });
 
 ConsensusTab.displayName = 'ConsensusTab';
-
 export default ConsensusTab;
