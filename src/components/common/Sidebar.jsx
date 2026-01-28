@@ -14,12 +14,13 @@ const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 // Tab configuration with icons
 const TABS = [
   { id: 'positions', label: 'Positions', icon: '📊', shortcut: '1' },
-  { id: 'distributions', label: 'Distributions', icon: '📈', shortcut: '2' },
-  { id: 'correlation', label: 'Correlation', icon: '🔗', shortcut: '3' },
-  { id: 'factors', label: 'Factors', icon: '⚡', shortcut: '4' },
-  { id: 'simulation', label: 'Simulation', icon: '🎲', shortcut: '5' },
-  { id: 'optimize', label: 'Optimize', icon: '🎯', shortcut: '6' },
-  { id: 'export', label: 'Export', icon: '📄', shortcut: '7' },
+  { id: 'consensus', label: 'Consensus', icon: '📋', shortcut: '2' },
+  { id: 'distributions', label: 'Distributions', icon: '📈', shortcut: '3' },
+  { id: 'correlation', label: 'Correlation', icon: '🔗', shortcut: '4' },
+  { id: 'factors', label: 'Factors', icon: '⚡', shortcut: '5' },
+  { id: 'simulation', label: 'Simulation', icon: '🎲', shortcut: '6' },
+  { id: 'optimize', label: 'Optimize', icon: '🎯', shortcut: '7' },
+  { id: 'export', label: 'Export', icon: '📄', shortcut: '8' },
 ];
 
 const Sidebar = memo(({
@@ -187,6 +188,7 @@ const Sidebar = memo(({
       display: 'flex',
       justifyContent: 'center',
       padding: '4px 0',
+      minHeight: '28px', // Fixed height to prevent layout shift
     },
   };
 
@@ -237,6 +239,8 @@ const Sidebar = memo(({
             gap: '2px',
             opacity: isExpanded ? 1 : 0,
             transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+            minHeight: '24px', // Fixed height to prevent layout shift
+            contain: 'layout', // Prevent reflows from affecting other elements
           }}>
             <AnimatedPortfolioValue
               value={portfolioValue || 0}
@@ -368,6 +372,8 @@ const Sidebar = memo(({
         display: 'flex',
         flexDirection: 'column',
         gap: '6px',
+        flexShrink: 0, // Prevent shrinking
+        contain: 'layout', // Isolate from layout changes above
       }}>
         {/* Load All Button */}
         <button
