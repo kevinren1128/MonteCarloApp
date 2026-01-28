@@ -3,10 +3,28 @@
  *
  * @module services/fmpService
  * @description API integration for fetching analyst estimates and financial data
+ * Uses CORS proxies since FMP doesn't support browser-based requests directly.
  */
 
 const BASE_URL = 'https://financialmodelingprep.com/api/v3';
 const STORAGE_KEY = 'monte-carlo-fmp-api-key';
+
+// CORS proxy configuration (same as yahooFinance)
+const CORS_PROXIES = [
+  {
+    name: 'allorigins',
+    buildUrl: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+    parseResponse: async (response) => {
+      const data = await response.json();
+      return data.contents ? JSON.parse(data.contents) : null;
+    },
+  },
+  {
+    name: 'corsproxy',
+    buildUrl: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    parseResponse: async (response) => response.json(),
+  },
+];
 
 /**
  * Get API key from environment or localStorage
@@ -47,29 +65,48 @@ export const clearApiKey = () => {
 };
 
 /**
- * Make authenticated API request
+ * Make authenticated API request via CORS proxy
  */
-const fetchFMP = async (endpoint, apiKey) => {
+const fetchFMP = async (endpoint, apiKey, timeout = 10000) => {
   const url = `${BASE_URL}${endpoint}${endpoint.includes('?') ? '&' : '?'}apikey=${apiKey}`;
 
   console.log('[FMP] Fetching:', endpoint);
 
-  const response = await fetch(url);
+  // Create a promise for each proxy that races with a timeout
+  const promises = CORS_PROXIES.map(async (proxy) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  if (!response.ok) {
-    console.error('[FMP] Error response:', response.status, response.statusText);
-    if (response.status === 401) {
-      throw new Error('Invalid API key');
+    try {
+      const proxyUrl = proxy.buildUrl(url);
+      const response = await fetch(proxyUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const data = await proxy.parseResponse(response);
+        if (data) {
+          // Check for FMP error responses
+          if (data['Error Message']) {
+            throw new Error(data['Error Message']);
+          }
+          return data;
+        }
+      }
+      throw new Error(`${proxy.name}: Invalid response`);
+    } catch (e) {
+      clearTimeout(timeoutId);
+      throw e;
     }
-    if (response.status === 429) {
-      throw new Error('Rate limit exceeded. Please wait and try again.');
-    }
-    throw new Error(`API error: ${response.status}`);
+  });
+
+  try {
+    const data = await Promise.any(promises);
+    console.log('[FMP] Response for', endpoint, ':', Array.isArray(data) ? `${data.length} items` : 'object');
+    return data;
+  } catch (e) {
+    console.error('[FMP] All proxies failed for:', endpoint);
+    throw new Error(`Failed to fetch ${endpoint}`);
   }
-
-  const data = await response.json();
-  console.log('[FMP] Response for', endpoint, ':', Array.isArray(data) ? `${data.length} items` : 'object');
-  return data;
 };
 
 /**
