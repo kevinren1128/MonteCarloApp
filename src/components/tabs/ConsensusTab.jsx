@@ -143,12 +143,16 @@ const ConsensusTab = memo(({
     }
   }, []);
 
-  // Get unique tickers from positions
+  // Get unique tickers from positions (exclude ETFs - they don't have analyst estimates)
   const tickers = [...new Set(
     positions
+      .filter(p => p.type !== 'ETF' && !p.ticker?.includes('ETF'))
       .map(p => p.ticker?.toUpperCase())
       .filter(t => t && t.length > 0)
   )];
+
+  // Count of excluded ETFs for display
+  const etfCount = positions.filter(p => p.type === 'ETF' || p.ticker?.includes('ETF')).length;
 
   // Validate and save API key
   const handleSaveApiKey = async () => {
@@ -438,8 +442,9 @@ const ConsensusTab = memo(({
                 fontSize: '12px',
                 color: 'rgba(255,255,255,0.5)',
               }}>
-                {tickers.length} position{tickers.length !== 1 ? 's' : ''} •{' '}
-                {Object.keys(consensusData).length} with data
+                {tickers.length} stock{tickers.length !== 1 ? 's' : ''}
+                {etfCount > 0 && <> • {etfCount} ETF{etfCount !== 1 ? 's' : ''} excluded</>}
+                {' '}• {Object.keys(consensusData).length} with data
                 {lastUpdated && (
                   <> • Updated {lastUpdated.toLocaleTimeString()}</>
                 )}
@@ -689,7 +694,8 @@ const ConsensusTab = memo(({
               color: 'rgba(255,255,255,0.5)',
               textAlign: 'center',
             }}>
-              Click "Load Estimates" to fetch forward consensus data for your {tickers.length} position{tickers.length !== 1 ? 's' : ''}
+              Click "Load Estimates" to fetch forward consensus data for your {tickers.length} stock{tickers.length !== 1 ? 's' : ''}
+              {etfCount > 0 && <><br/><span style={{ fontSize: '11px' }}>({etfCount} ETF{etfCount !== 1 ? 's' : ''} excluded - no analyst estimates)</span></>}
             </p>
           </div>
         </Card>
