@@ -49,7 +49,7 @@ const OptimizeTab = memo(({
 }) => {
   try {
     const tickers = positions.map(p => p.ticker?.toUpperCase()).filter(t => t);
-    const hasCorrelation = editedCorrelation && editedCorrelation.matrix?.length >= 2;
+    const hasCorrelation = editedCorrelation && Array.isArray(editedCorrelation) && editedCorrelation.length >= 2;
     // Allow optimization if we have correlation data OR if we already have results (can re-run)
     const hasExistingResults = optimizationResults && optimizationResults.current;
     const canOptimize = tickers.length >= 2 && (hasCorrelation || hasExistingResults);
