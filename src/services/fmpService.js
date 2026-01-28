@@ -3,38 +3,11 @@
  *
  * @module services/fmpService
  * @description API integration for fetching analyst estimates and financial data
- * Uses CORS proxies since FMP doesn't support browser-based requests directly.
+ * Uses the stable API endpoint with header-based authentication.
  */
 
-const BASE_URL = 'https://financialmodelingprep.com/api/v3';
+const BASE_URL = 'https://financialmodelingprep.com/stable';
 const STORAGE_KEY = 'monte-carlo-fmp-api-key';
-
-// CORS proxy configuration - multiple fallbacks for reliability
-const CORS_PROXIES = [
-  {
-    name: 'corsproxy-org',
-    buildUrl: (url) => `https://corsproxy.org/?${encodeURIComponent(url)}`,
-    parseResponse: async (response) => response.json(),
-  },
-  {
-    name: 'thingproxy',
-    buildUrl: (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
-    parseResponse: async (response) => response.json(),
-  },
-  {
-    name: 'allorigins-raw',
-    buildUrl: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    parseResponse: async (response) => response.json(),
-  },
-  {
-    name: 'allorigins',
-    buildUrl: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-    parseResponse: async (response) => {
-      const data = await response.json();
-      return data.contents ? JSON.parse(data.contents) : null;
-    },
-  },
-];
 
 /**
  * Get API key from environment or localStorage
@@ -75,47 +48,49 @@ export const clearApiKey = () => {
 };
 
 /**
- * Make authenticated API request via CORS proxy
+ * Make authenticated API request to FMP stable API
+ * Tries direct request first (with header auth), falls back to query param
  */
-const fetchFMP = async (endpoint, apiKey, timeout = 10000) => {
-  const url = `${BASE_URL}${endpoint}${endpoint.includes('?') ? '&' : '?'}apikey=${apiKey}`;
+const fetchFMP = async (endpoint, apiKey, timeout = 15000) => {
+  const url = `${BASE_URL}${endpoint}`;
+  const urlWithKey = `${url}${endpoint.includes('?') ? '&' : '?'}apikey=${apiKey}`;
 
   console.log('[FMP] Fetching:', endpoint);
 
-  // Try each proxy sequentially to avoid rate limiting
-  for (const proxy of CORS_PROXIES) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    try {
-      const proxyUrl = proxy.buildUrl(url);
-      const fetchOptions = {
-        signal: controller.signal,
-        headers: proxy.headers || {},
-      };
-      const response = await fetch(proxyUrl, fetchOptions);
-      clearTimeout(timeoutId);
+  try {
+    // Try direct request with API key in query string
+    const response = await fetch(urlWithKey, {
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+    clearTimeout(timeoutId);
 
-      if (response.ok) {
-        const data = await proxy.parseResponse(response);
-        if (data) {
-          // Check for FMP error responses
-          if (data['Error Message']) {
-            throw new Error(data['Error Message']);
-          }
-          console.log('[FMP] Response for', endpoint, ':', Array.isArray(data) ? `${data.length} items` : 'object');
-          return data;
+    if (response.ok) {
+      const data = await response.json();
+      if (data) {
+        // Check for FMP error responses
+        if (data['Error Message']) {
+          throw new Error(data['Error Message']);
         }
+        console.log('[FMP] Response for', endpoint, ':', Array.isArray(data) ? `${data.length} items` : 'object');
+        return data;
       }
-      // Response not ok, try next proxy
-    } catch (e) {
-      clearTimeout(timeoutId);
-      // Request failed, try next proxy
     }
-  }
 
-  console.error('[FMP] All proxies failed for:', endpoint);
-  throw new Error(`Failed to fetch ${endpoint}`);
+    // Log error details
+    const errorText = await response.text().catch(() => 'No error body');
+    console.error('[FMP] Request failed:', response.status, errorText);
+    throw new Error(`FMP API error: ${response.status}`);
+  } catch (e) {
+    clearTimeout(timeoutId);
+    console.error('[FMP] Fetch error for', endpoint, ':', e.message);
+    throw e;
+  }
 };
 
 /**
@@ -124,7 +99,7 @@ const fetchFMP = async (endpoint, apiKey, timeout = 10000) => {
  */
 export const fetchAnalystEstimates = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/analyst-estimates/${ticker}?limit=2`, apiKey);
+    const data = await fetchFMP(`/analyst-estimates?symbol=${ticker}&limit=2`, apiKey);
 
     if (!data || data.length === 0) {
       return null;
@@ -166,7 +141,7 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
  */
 export const fetchQuote = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/quote/${ticker}`, apiKey);
+    const data = await fetchFMP(`/quote?symbol=${ticker}`, apiKey);
 
     if (!data || data.length === 0) {
       return null;
@@ -191,7 +166,7 @@ export const fetchQuote = async (ticker, apiKey) => {
  */
 export const fetchEnterpriseValue = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/enterprise-values/${ticker}?limit=1`, apiKey);
+    const data = await fetchFMP(`/enterprise-values?symbol=${ticker}&limit=1`, apiKey);
 
     if (!data || data.length === 0) {
       return null;
@@ -215,7 +190,7 @@ export const fetchEnterpriseValue = async (ticker, apiKey) => {
  */
 export const fetchKeyMetrics = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/key-metrics-ttm/${ticker}`, apiKey);
+    const data = await fetchFMP(`/key-metrics?symbol=${ticker}&period=ttm`, apiKey);
 
     if (!data || data.length === 0) {
       return null;
@@ -223,14 +198,14 @@ export const fetchKeyMetrics = async (ticker, apiKey) => {
 
     const metrics = data[0];
     return {
-      peRatio: metrics.peRatioTTM,
-      pbRatio: metrics.pbRatioTTM,
-      evToEbitda: metrics.enterpriseValueOverEBITDATTM,
-      evToSales: metrics.evToSalesTTM,
-      grossProfitMargin: metrics.grossProfitMarginTTM,
-      operatingProfitMargin: metrics.operatingProfitMarginTTM,
-      netProfitMargin: metrics.netProfitMarginTTM,
-      revenuePerShare: metrics.revenuePerShareTTM,
+      peRatio: metrics.peRatioTTM || metrics.peRatio,
+      pbRatio: metrics.pbRatioTTM || metrics.pbRatio,
+      evToEbitda: metrics.enterpriseValueOverEBITDATTM || metrics.enterpriseValueOverEBITDA,
+      evToSales: metrics.evToSalesTTM || metrics.evToSales,
+      grossProfitMargin: metrics.grossProfitMarginTTM || metrics.grossProfitMargin,
+      operatingProfitMargin: metrics.operatingProfitMarginTTM || metrics.operatingProfitMargin,
+      netProfitMargin: metrics.netProfitMarginTTM || metrics.netProfitMargin,
+      revenuePerShare: metrics.revenuePerShareTTM || metrics.revenuePerShare,
     };
   } catch (err) {
     console.warn(`Failed to fetch key metrics for ${ticker}:`, err);
@@ -243,7 +218,7 @@ export const fetchKeyMetrics = async (ticker, apiKey) => {
  */
 export const fetchIncomeStatement = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/income-statement/${ticker}?limit=1`, apiKey);
+    const data = await fetchFMP(`/income-statement?symbol=${ticker}&limit=1`, apiKey);
 
     if (!data || data.length === 0) {
       return null;
@@ -375,7 +350,6 @@ export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
   const total = tickers.length;
 
   // Process sequentially to respect rate limits
-  // FMP free tier has limited requests per minute
   for (let i = 0; i < tickers.length; i++) {
     const ticker = tickers[i];
 
@@ -392,9 +366,9 @@ export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
       onProgress(i + 1, total);
     }
 
-    // Small delay to avoid rate limiting (250ms between requests)
+    // Small delay to avoid rate limiting (500ms between tickers)
     if (i < tickers.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 
@@ -406,7 +380,7 @@ export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
  */
 export const validateApiKey = async (apiKey) => {
   try {
-    const data = await fetchFMP('/quote/AAPL', apiKey);
+    const data = await fetchFMP('/quote?symbol=AAPL', apiKey);
     return data && data.length > 0;
   } catch {
     return false;
