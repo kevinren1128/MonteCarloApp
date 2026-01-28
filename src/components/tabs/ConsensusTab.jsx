@@ -12,7 +12,39 @@ import {
   saveApiKey,
   batchFetchConsensusData,
   validateApiKey,
+  fetchMissingConsensusData,
 } from '../../services/fmpService';
+
+// Storage key for persisting consensus data
+const CONSENSUS_STORAGE_KEY = 'monte-carlo-consensus-data';
+const CONSENSUS_TIMESTAMP_KEY = 'monte-carlo-consensus-timestamp';
+
+// Save consensus data to localStorage
+const saveConsensusData = (data) => {
+  try {
+    localStorage.setItem(CONSENSUS_STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(CONSENSUS_TIMESTAMP_KEY, Date.now().toString());
+  } catch (err) {
+    console.warn('Failed to save consensus data:', err);
+  }
+};
+
+// Load consensus data from localStorage
+const loadConsensusData = () => {
+  try {
+    const data = localStorage.getItem(CONSENSUS_STORAGE_KEY);
+    const timestamp = localStorage.getItem(CONSENSUS_TIMESTAMP_KEY);
+    if (data) {
+      return {
+        data: JSON.parse(data),
+        timestamp: timestamp ? new Date(parseInt(timestamp)) : null,
+      };
+    }
+  } catch (err) {
+    console.warn('Failed to load consensus data:', err);
+  }
+  return { data: {}, timestamp: null };
+};
 
 // Design tokens
 const COLORS = {
@@ -189,12 +221,20 @@ const ConsensusTab = memo(({ positions, styles }) => {
   const [viewTab, setViewTab] = useState('estimates');
   const [expandedRows, setExpandedRows] = useState(new Set());
 
-  // Load API key
+  // Load API key and persisted consensus data on mount
   useEffect(() => {
     const savedKey = getApiKey();
     if (savedKey) {
       setApiKey(savedKey);
       setApiKeyInput(savedKey);
+    }
+
+    // Load persisted consensus data
+    const { data, timestamp } = loadConsensusData();
+    if (data && Object.keys(data).length > 0) {
+      setConsensusData(data);
+      setLastUpdated(timestamp);
+      console.log('[Consensus] Loaded persisted data for', Object.keys(data).length, 'tickers');
     }
   }, []);
 
@@ -219,7 +259,7 @@ const ConsensusTab = memo(({ positions, styles }) => {
     setIsValidatingKey(false);
   };
 
-  // Fetch data
+  // Fetch data (refresh all)
   const handleFetchData = useCallback(async () => {
     if (!apiKey || !tickers.length) return;
     setIsLoading(true);
@@ -231,9 +271,30 @@ const ConsensusTab = memo(({ positions, styles }) => {
       );
       setConsensusData(data);
       setLastUpdated(new Date());
+      // Persist to localStorage
+      saveConsensusData(data);
     } catch (err) { setError(err.message); }
     setIsLoading(false);
   }, [apiKey, tickers]);
+
+  // Fetch only missing/failed tickers
+  const handleRetryFailed = useCallback(async () => {
+    if (!apiKey || !tickers.length) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updatedData = await fetchMissingConsensusData(
+        tickers,
+        consensusData,
+        apiKey,
+        (current, total, ticker) => setLoadingProgress({ current, total, ticker })
+      );
+      setConsensusData(updatedData);
+      setLastUpdated(new Date());
+      saveConsensusData(updatedData);
+    } catch (err) { setError(err.message); }
+    setIsLoading(false);
+  }, [apiKey, tickers, consensusData]);
 
   // Sorting
   const sortedData = useMemo(() => {
@@ -410,17 +471,36 @@ const ConsensusTab = memo(({ positions, styles }) => {
     const isExpanded = expandedRows.has(row.ticker);
 
     const tickerCell = (
-      <td key="ticker" style={{ padding: '6px 5px', fontSize: '10px', position: 'sticky', left: 0, background: isExpanded ? 'rgba(12,14,24,0.98)' : 'rgba(12,14,24,0.95)', zIndex: 1 }}>
+      <td key="ticker" style={{
+        padding: '6px 5px',
+        fontSize: '10px',
+        position: 'sticky',
+        left: 0,
+        background: isExpanded ? 'rgba(12,14,24,0.98)' : 'rgba(12,14,24,0.95)',
+        zIndex: 1,
+        userSelect: 'none',
+        cursor: 'pointer',
+      }}>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-            <span style={{ fontWeight: '600', color: COLORS.cyan, cursor: 'pointer' }} onClick={() => toggleRow(row.ticker)}>
-              {isExpanded ? '▼' : '▶'} {row.ticker}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{
+              fontSize: '10px',
+              color: 'rgba(255,255,255,0.5)',
+              width: '12px',
+              flexShrink: 0,
+            }}>
+              {isExpanded ? '▼' : '▶'}
+            </span>
+            <span style={{ fontWeight: '600', color: COLORS.cyan }}>
+              {row.ticker}
             </span>
             {row.fmpSymbol && row.fmpSymbol !== row.ticker && (
               <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.3)' }}>→{row.fmpSymbol}</span>
             )}
+            {row.isEtf && <Badge color={COLORS.purple} small>ETF</Badge>}
+            {row.failed && <Badge color={COLORS.red} small>Failed</Badge>}
           </div>
-          <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
+          <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginLeft: '16px' }}>{row.name}</span>
         </div>
       </td>
     );
@@ -476,7 +556,7 @@ const ConsensusTab = memo(({ positions, styles }) => {
         <Cell key="evEbit" value={formatMult(row.multiples?.evToEbit)} />,
         <Cell key="ps" value={formatMult(row.multiples?.priceToSales)} />,
         <Cell key="pfcf" value={formatMult(row.cashFlow?.priceToFCF)} />,
-        <Cell key="pb" value={formatMult(row.historical?.pbRatio)} />,
+        <Cell key="pb" value={formatMult(row.cashFlow?.priceToBook || row.historical?.pbRatio)} />,
         <Cell key="divY" value={row.cashFlow?.dividendYield != null ? formatPct(row.cashFlow.dividendYield) : '—'} color={row.cashFlow?.dividendYield > 0.02 ? COLORS.green : undefined} />,
         <Cell key="fcfY" value={row.profitability?.freeCashFlowYield != null ? formatPct(row.profitability.freeCashFlowYield) : '—'} color={row.profitability?.freeCashFlowYield > 0.05 ? COLORS.green : undefined} />,
       ];
@@ -578,10 +658,19 @@ const ConsensusTab = memo(({ positions, styles }) => {
             {lastUpdated && ` • ${lastUpdated.toLocaleTimeString()}`}
           </p>
         </div>
-        <button onClick={handleFetchData} disabled={isLoading}
-          style={{ padding: '8px 16px', background: isLoading ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)', border: 'none', borderRadius: '6px', color: '#fff', fontSize: '11px', fontWeight: '600', cursor: isLoading ? 'wait' : 'pointer' }}>
-          {isLoading ? `⏳ ${loadingProgress.current}/${loadingProgress.total} ${loadingProgress.ticker}` : '🔄 Load Data'}
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {/* Show Retry button if there are failed tickers */}
+          {Object.values(consensusData).some(d => d?.failed) && !isLoading && (
+            <button onClick={handleRetryFailed}
+              style={{ padding: '8px 12px', background: 'rgba(231,76,60,0.2)', border: '1px solid rgba(231,76,60,0.4)', borderRadius: '6px', color: COLORS.red, fontSize: '11px', fontWeight: '600', cursor: 'pointer' }}>
+              🔁 Retry Failed
+            </button>
+          )}
+          <button onClick={handleFetchData} disabled={isLoading}
+            style={{ padding: '8px 16px', background: isLoading ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)', border: 'none', borderRadius: '6px', color: '#fff', fontSize: '11px', fontWeight: '600', cursor: isLoading ? 'wait' : 'pointer' }}>
+            {isLoading ? `⏳ ${loadingProgress.current}/${loadingProgress.total} ${loadingProgress.ticker}` : '🔄 Refresh All'}
+          </button>
+        </div>
       </div>
 
       {error && <div style={{ marginBottom: '12px', padding: '10px', background: 'rgba(231,76,60,0.1)', borderRadius: '6px', color: COLORS.red, fontSize: '11px' }}>⚠️ {error}</div>}

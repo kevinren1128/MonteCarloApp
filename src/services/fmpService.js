@@ -9,6 +9,11 @@
 const BASE_URL = 'https://financialmodelingprep.com/stable';
 const STORAGE_KEY = 'monte-carlo-fmp-api-key';
 
+// Cache for ETF list to avoid repeated API calls
+let etfListCache = null;
+let etfListCacheTime = 0;
+const ETF_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
 /**
  * Get API key from environment or localStorage
  */
@@ -105,6 +110,7 @@ const extractFiscalYear = (dateStr) => {
 /**
  * Fetch analyst estimates for a ticker
  * Returns forward revenue, EPS, EBIT, net income estimates
+ * Note: FMP returns estimates for future fiscal years. Dates represent fiscal year end.
  */
 export const fetchAnalystEstimates = async (ticker, apiKey) => {
   try {
@@ -116,11 +122,21 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
       return null;
     }
 
-    // Log full response for debugging
+    // Log all fields to understand data structure
+    if (data[0]) {
+      console.log('[FMP] Analyst estimates fields for', ticker, ':', Object.keys(data[0]));
+    }
+
+    // Get current date to filter for forward-looking estimates only
+    const today = new Date().toISOString().split('T')[0];
+
+    // Log full response for debugging - include currency if available
     console.log('[FMP] Analyst estimates for', ticker, '- raw data:', data.map(d => ({
       date: d.date,
+      symbol: d.symbol,
       revenue: d.estimatedRevenueAvg || d.revenueAvg,
       eps: d.estimatedEpsAvg || d.epsAvg,
+      isFuture: d.date > today,
     })));
 
     // Try multiple possible field name variations
@@ -181,6 +197,41 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
 };
 
 /**
+ * Fetch the list of all ETFs (cached for 24 hours)
+ * Used to pre-filter ETFs before making expensive API calls
+ */
+export const fetchEtfList = async (apiKey) => {
+  // Return cached list if still valid
+  if (etfListCache && Date.now() - etfListCacheTime < ETF_CACHE_DURATION) {
+    return etfListCache;
+  }
+
+  try {
+    const data = await fetchFMP('/etf-list', apiKey);
+
+    if (data && Array.isArray(data)) {
+      // Create a Set of ETF symbols for O(1) lookup
+      etfListCache = new Set(data.map(etf => etf.symbol?.toUpperCase()));
+      etfListCacheTime = Date.now();
+      console.log(`[FMP] Cached ${etfListCache.size} ETF symbols`);
+      return etfListCache;
+    }
+    return new Set();
+  } catch (err) {
+    console.warn('Failed to fetch ETF list:', err);
+    return new Set();
+  }
+};
+
+/**
+ * Check if a ticker is an ETF
+ */
+export const isEtf = async (ticker, apiKey) => {
+  const etfSet = await fetchEtfList(apiKey);
+  return etfSet.has(ticker.toUpperCase());
+};
+
+/**
  * Fetch current quote data (price, market cap)
  */
 export const fetchQuote = async (ticker, apiKey) => {
@@ -192,12 +243,20 @@ export const fetchQuote = async (ticker, apiKey) => {
     }
 
     const quote = data[0];
+    // Log all fields to understand what's available
+    console.log('[FMP] Quote fields for', ticker, ':', Object.keys(quote));
+
     return {
       price: quote.price,
       marketCap: quote.marketCap,
       name: quote.name,
       exchange: quote.exchange,
+      exchangeShortName: quote.exchangeShortName,
       changesPercentage: quote.changesPercentage,
+      // Currency info if available
+      currency: quote.currency,
+      // Type info if available
+      type: quote.type,
     };
   } catch (err) {
     console.warn(`Failed to fetch quote for ${ticker}:`, err);
@@ -283,6 +342,9 @@ export const fetchFinancialRatios = async (ticker, apiKey) => {
     }
 
     const latest = data[0];
+    // Log all available ratio fields
+    console.log('[FMP] Ratios fields for', ticker, ':', Object.keys(latest));
+
     // Calculate 3Y averages for key ratios
     const avg = (field) => {
       const values = data.map(d => d[field]).filter(v => v != null && !isNaN(v));
@@ -298,6 +360,11 @@ export const fetchFinancialRatios = async (ticker, apiKey) => {
       returnOnAssets: latest.returnOnAssets,
       returnOnCapitalEmployed: latest.returnOnCapitalEmployed,
       debtRatio: latest.debtRatio,
+      // Valuation ratios
+      priceToBookRatio: latest.priceToBookRatio || latest.priceBookValueRatio,
+      priceEarningsRatio: latest.priceEarningsRatio,
+      priceToSalesRatio: latest.priceToSalesRatio,
+      dividendYield: latest.dividendYield,
       debtEquityRatio: latest.debtEquityRatio,
       interestCoverage: latest.interestCoverage,
       currentRatio: latest.currentRatio,
@@ -641,7 +708,8 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       freeCashFlowPerShare: ratios?.freeCashFlowPerShare,
       operatingCashFlowPerShare: ratios?.operatingCashFlowPerShare,
       priceToFCF: ratios?.priceToFreeCashFlowsRatio,
-      dividendYield: metrics?.dividendYield,
+      priceToBook: ratios?.priceToBookRatio || metrics?.pbRatio,
+      dividendYield: ratios?.dividendYield || metrics?.dividendYield,
       payoutRatio: metrics?.payoutRatio,
     },
 
@@ -695,27 +763,48 @@ export const fetchConsensusData = async (ticker, apiKey) => {
 
 /**
  * Batch fetch consensus data for multiple tickers
+ * Pre-filters ETFs to avoid wasting API calls
  * Includes symbol resolution for international tickers
  * @param {string[]} tickers - Array of ticker symbols
  * @param {string} apiKey - FMP API key
  * @param {function} onProgress - Optional progress callback (current, total, currentTicker, phase)
- * @returns {Object} Map of ticker -> consensus data
+ * @returns {Object} Map of ticker -> consensus data (includes { isEtf: true } for filtered ETFs)
  */
 export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
   const results = {};
   const symbolMap = {}; // Maps user ticker -> FMP symbol
-  const total = tickers.length;
+  const etfTickers = new Set();
 
-  // Phase 1: Identify which tickers need symbol resolution
+  // Phase 1: Pre-fetch ETF list to filter before expensive API calls
+  console.log('[FMP] Fetching ETF list for pre-filtering...');
+  const etfSet = await fetchEtfList(apiKey);
+
+  // Identify ETFs
+  for (const ticker of tickers) {
+    if (etfSet.has(ticker.toUpperCase())) {
+      etfTickers.add(ticker);
+      results[ticker] = { ticker, isEtf: true, name: ticker };
+    }
+  }
+
+  if (etfTickers.size > 0) {
+    console.log(`[FMP] Pre-filtered ${etfTickers.size} ETFs:`, [...etfTickers]);
+  }
+
+  // Get non-ETF tickers
+  const stockTickers = tickers.filter(t => !etfTickers.has(t));
+  const total = stockTickers.length;
+
+  // Phase 2: Identify which tickers need symbol resolution
   // International tickers typically have exchange suffixes (.AS, .T, .L, etc.)
   // or are numeric (Japanese stocks like 6525)
-  const needsResolution = tickers.filter(t => {
+  const needsResolution = stockTickers.filter(t => {
     const hasExchangeSuffix = t.includes('.') && !/^[A-Z]+$/.test(t);
     const isNumeric = /^\d+/.test(t);
     return hasExchangeSuffix || isNumeric;
   });
 
-  // Phase 2: Resolve international symbols if needed
+  // Phase 3: Resolve international symbols if needed
   if (needsResolution.length > 0) {
     console.log('[FMP] Resolving international symbols:', needsResolution);
 
@@ -739,13 +828,16 @@ export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
     }
   }
 
-  // Phase 3: Fetch consensus data for all tickers
-  for (let i = 0; i < tickers.length; i++) {
-    const userTicker = tickers[i];
+  // Phase 4: Fetch consensus data for non-ETF tickers only
+  const failedTickers = []; // Track failed tickers for retry
+
+  for (let i = 0; i < stockTickers.length; i++) {
+    const userTicker = stockTickers[i];
     const fmpSymbol = symbolMap[userTicker] || userTicker;
 
     if (onProgress) {
-      onProgress(i + 1, total, userTicker);
+      // Show progress including ETFs in count
+      onProgress(etfTickers.size + i + 1, tickers.length, userTicker);
     }
 
     try {
@@ -760,17 +852,89 @@ export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
       }
     } catch (err) {
       console.warn(`Failed to fetch consensus data for ${userTicker} (${fmpSymbol}):`, err);
+      // Track failed tickers for potential retry
+      failedTickers.push(userTicker);
+
+      // If rate limited (429), increase delay
+      if (err.message?.includes('429') || err.message?.includes('rate')) {
+        console.log('[FMP] Rate limited, increasing delay...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
     }
 
     // Delay between tickers to respect rate limits
     // 11 API calls per ticker + potential resolution, 300 calls/min limit
     // 11 calls = needs ~2.2s at 5 calls/sec, using 2.5s delay for safety
-    if (i < tickers.length - 1) {
+    if (i < stockTickers.length - 1) {
       await new Promise(resolve => setTimeout(resolve, 2500));
     }
   }
 
+  // Retry failed tickers after a longer delay (rate limit reset)
+  if (failedTickers.length > 0) {
+    console.log(`[FMP] Retrying ${failedTickers.length} failed tickers after delay...`);
+    await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second wait for rate limit reset
+
+    for (let i = 0; i < failedTickers.length; i++) {
+      const userTicker = failedTickers[i];
+      const fmpSymbol = symbolMap[userTicker] || userTicker;
+
+      if (onProgress) {
+        onProgress(tickers.length, tickers.length, `Retry: ${userTicker}`);
+      }
+
+      try {
+        const data = await fetchConsensusData(fmpSymbol, apiKey);
+        if (data) {
+          results[userTicker] = {
+            ...data,
+            ticker: userTicker,
+            fmpSymbol: fmpSymbol !== userTicker ? fmpSymbol : undefined,
+          };
+        }
+      } catch (err) {
+        console.warn(`[FMP] Retry failed for ${userTicker}:`, err);
+        // Mark as failed for UI to show
+        results[userTicker] = { ticker: userTicker, failed: true, error: err.message };
+      }
+
+      // Longer delay on retry
+      if (i < failedTickers.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    }
+  }
+
   return results;
+};
+
+/**
+ * Fetch consensus data for specific tickers only (for retry/refresh)
+ * Use this to load missing tickers without re-fetching everything
+ */
+export const fetchMissingConsensusData = async (tickers, existingData, apiKey, onProgress) => {
+  // Find tickers that don't have valid data yet
+  const missingTickers = tickers.filter(t => {
+    const data = existingData[t];
+    // Missing if: no data, failed, is ETF, or no estimates
+    if (!data) return true;
+    if (data.failed) return true;
+    if (data.isEtf) return false; // Don't retry ETFs
+    return false;
+  });
+
+  if (missingTickers.length === 0) {
+    console.log('[FMP] No missing tickers to fetch');
+    return existingData;
+  }
+
+  console.log(`[FMP] Fetching ${missingTickers.length} missing tickers:`, missingTickers);
+
+  // Fetch missing tickers
+  const newData = await batchFetchConsensusData(missingTickers, apiKey, onProgress);
+
+  // Merge with existing data
+  return { ...existingData, ...newData };
 };
 
 /**
@@ -821,22 +985,54 @@ export const searchSymbol = async (query, apiKey, limit = 10) => {
  * @returns {Promise<{fmpSymbol: string, name: string, exchange: string} | null>}
  */
 export const resolveSymbol = async (ticker, apiKey) => {
-  // First, try direct quote - if it works, the symbol is valid
-  try {
-    const quoteData = await fetchFMP(`/quote?symbol=${ticker}`, apiKey);
-    if (quoteData && quoteData.length > 0) {
-      return {
-        fmpSymbol: ticker,
-        name: quoteData[0].name,
-        exchange: quoteData[0].exchange,
-      };
+  console.log('[FMP] Resolving symbol:', ticker);
+
+  // Extract the base ticker and suffix
+  const parts = ticker.split('.');
+  const baseTicker = parts[0];
+  const exchangeSuffix = parts[1]?.toUpperCase();
+
+  // Map Yahoo/common suffixes to FMP format
+  // Yahoo uses .AS for Amsterdam, FMP might use .AMS or the ticker directly
+  const yahooToFmpSuffix = {
+    'AS': ['AS', 'AMS', ''], // Amsterdam - try with suffix, AMS suffix, or without
+    'T': ['T', 'TSE', ''],   // Tokyo
+    'L': ['L', 'LON', ''],   // London
+    'HK': ['HK', ''],        // Hong Kong
+    'DE': ['DE', 'XETRA', ''], // Germany
+    'PA': ['PA', 'EPA', ''], // Paris
+    'SW': ['SW', 'SIX', ''], // Swiss
+  };
+
+  // Build list of symbol variations to try
+  const symbolsToTry = [ticker]; // Try original first
+
+  if (exchangeSuffix && yahooToFmpSuffix[exchangeSuffix]) {
+    for (const suffix of yahooToFmpSuffix[exchangeSuffix]) {
+      if (suffix === '') {
+        symbolsToTry.push(baseTicker); // Try without suffix
+      } else if (suffix !== exchangeSuffix) {
+        symbolsToTry.push(`${baseTicker}.${suffix}`);
+      }
     }
-  } catch (e) {
-    // Quote failed, try search
   }
 
-  // Extract the base ticker (without exchange suffix)
-  const baseTicker = ticker.split('.')[0];
+  // Try each symbol variation with direct quote
+  for (const symbol of symbolsToTry) {
+    try {
+      const quoteData = await fetchFMP(`/quote?symbol=${symbol}`, apiKey);
+      if (quoteData && quoteData.length > 0) {
+        console.log(`[FMP] Resolved ${ticker} -> ${symbol} via quote`);
+        return {
+          fmpSymbol: symbol,
+          name: quoteData[0].name,
+          exchange: quoteData[0].exchange,
+        };
+      }
+    } catch (e) {
+      // Quote failed, try next
+    }
+  }
 
   // Search for the symbol
   try {
