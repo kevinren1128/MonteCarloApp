@@ -220,9 +220,17 @@ const Sidebar = memo(({
     <div style={styles.sidebar}>
       {/* Header with logo and portfolio value */}
       <div style={styles.header}>
-        <div style={styles.logo}>
-          <span style={styles.logoIcon}>🎲</span>
-          <span style={styles.logoText}>Monte Carlo</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={styles.logo}>
+            <span style={styles.logoIcon}>🎲</span>
+            <span style={styles.logoText}>Monte Carlo</span>
+          </div>
+          {/* Autosave indicator - in header for visibility */}
+          {AutosaveIndicator && (
+            <div style={{ flexShrink: 0 }}>
+              <AutosaveIndicator status={autosaveStatus} compact={true} />
+            </div>
+          )}
         </div>
 
         {/* Portfolio Value - Expanded */}
@@ -599,23 +607,8 @@ const Sidebar = memo(({
         )}
       </div>
 
-      {/* Footer with toggle and autosave */}
-      <div style={{ ...styles.footer, position: 'relative' }}>
-        {/* Autosave indicator - absolutely positioned to avoid layout shifts */}
-        {AutosaveIndicator && (
-          <div style={{
-            position: 'absolute',
-            top: '-24px',
-            left: 0,
-            right: 0,
-            display: 'flex',
-            justifyContent: 'center',
-            pointerEvents: 'none',
-          }}>
-            <AutosaveIndicator status={autosaveStatus} compact={!isExpanded} />
-          </div>
-        )}
-
+      {/* Footer with toggle */}
+      <div style={styles.footer}>
         <button
           style={{
             ...styles.toggleButton,
