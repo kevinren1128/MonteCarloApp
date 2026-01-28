@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run dev:*)",
+      "Bash(timeout /t:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(npm rebuild:*)",
+      "Bash(node -e \"require\\(''@esbuild/win32-x64''\\)\")",
+      "Bash(npx eslint:*)",
+      "Bash(node --check:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm run build:*)",
+      "Bash(wc:*)",
+      "Bash(more:*)"
+    ]
+  }
+}
