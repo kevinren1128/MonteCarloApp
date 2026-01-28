@@ -600,9 +600,18 @@ const Sidebar = memo(({
       </div>
 
       {/* Footer with toggle and autosave */}
-      <div style={styles.footer}>
+      <div style={{ ...styles.footer, position: 'relative' }}>
+        {/* Autosave indicator - absolutely positioned to avoid layout shifts */}
         {AutosaveIndicator && (
-          <div style={styles.autosaveContainer}>
+          <div style={{
+            position: 'absolute',
+            top: '-24px',
+            left: 0,
+            right: 0,
+            display: 'flex',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+          }}>
             <AutosaveIndicator status={autosaveStatus} compact={!isExpanded} />
           </div>
         )}
