@@ -290,16 +290,153 @@ export const fetchIncomeStatement = async (ticker, apiKey) => {
 };
 
 /**
- * Fetch all consensus data for a single ticker
+ * Fetch analyst price targets
+ */
+export const fetchPriceTargets = async (ticker, apiKey) => {
+  try {
+    const data = await fetchFMP(`/price-target-consensus?symbol=${ticker}`, apiKey);
+
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    const target = data[0];
+    return {
+      targetHigh: target.targetHigh,
+      targetLow: target.targetLow,
+      targetConsensus: target.targetConsensus,
+      targetMedian: target.targetMedian,
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch price targets for ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Fetch analyst ratings consensus (buy/hold/sell)
+ */
+export const fetchAnalystRatings = async (ticker, apiKey) => {
+  try {
+    const data = await fetchFMP(`/grades-consensus?symbol=${ticker}`, apiKey);
+
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    const ratings = data[0];
+    return {
+      strongBuy: ratings.strongBuy || 0,
+      buy: ratings.buy || 0,
+      hold: ratings.hold || 0,
+      sell: ratings.sell || 0,
+      strongSell: ratings.strongSell || 0,
+      consensus: ratings.consensus || null,
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch analyst ratings for ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Fetch historical financial growth rates
+ */
+export const fetchFinancialGrowth = async (ticker, apiKey) => {
+  try {
+    const data = await fetchFMP(`/financial-growth?symbol=${ticker}&limit=3`, apiKey);
+
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    // Calculate average growth over available periods
+    const avgGrowth = (field) => {
+      const values = data.map(d => d[field]).filter(v => v != null && !isNaN(v));
+      if (values.length === 0) return null;
+      return values.reduce((a, b) => a + b, 0) / values.length;
+    };
+
+    return {
+      revenueGrowth: avgGrowth('revenueGrowth'),
+      netIncomeGrowth: avgGrowth('netIncomeGrowth'),
+      epsgrowth: avgGrowth('epsgrowth'),
+      ebitgrowth: avgGrowth('ebitgrowth'),
+      operatingIncomeGrowth: avgGrowth('operatingIncomeGrowth'),
+      grossProfitGrowth: avgGrowth('grossProfitGrowth'),
+      periods: data.length,
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch financial growth for ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Fetch upcoming earnings date and recent surprises
+ */
+export const fetchEarningsCalendar = async (ticker, apiKey) => {
+  try {
+    const data = await fetchFMP(`/earnings-calendar?symbol=${ticker}`, apiKey);
+
+    if (!data || data.length === 0) {
+      return null;
+    }
+
+    // Find next upcoming earnings (date >= today)
+    const today = new Date().toISOString().split('T')[0];
+    const upcoming = data.find(e => e.date >= today);
+
+    // Get most recent past earnings for surprise data
+    const recent = data.filter(e => e.date < today).slice(0, 4);
+
+    // Calculate average surprise
+    const surprises = recent
+      .map(e => {
+        if (e.eps != null && e.epsEstimated != null && e.epsEstimated !== 0) {
+          return (e.eps - e.epsEstimated) / Math.abs(e.epsEstimated);
+        }
+        return null;
+      })
+      .filter(s => s != null);
+
+    const avgSurprise = surprises.length > 0
+      ? surprises.reduce((a, b) => a + b, 0) / surprises.length
+      : null;
+
+    return {
+      nextEarningsDate: upcoming?.date || null,
+      nextEpsEstimate: upcoming?.epsEstimated || null,
+      lastEps: recent[0]?.eps || null,
+      lastEpsEstimate: recent[0]?.epsEstimated || null,
+      lastSurprise: recent[0] && recent[0].epsEstimated
+        ? (recent[0].eps - recent[0].epsEstimated) / Math.abs(recent[0].epsEstimated)
+        : null,
+      avgSurprise,
+      beatCount: surprises.filter(s => s > 0).length,
+      missCount: surprises.filter(s => s < 0).length,
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch earnings calendar for ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Fetch all consensus data for a single ticker (enhanced with 9 API calls)
  */
 export const fetchConsensusData = async (ticker, apiKey) => {
-  // Fetch all data in parallel
-  const [estimates, quote, ev, metrics, income] = await Promise.all([
+  // Fetch all data in parallel (9 API calls per ticker)
+  const [estimates, quote, ev, metrics, income, priceTargets, ratings, growth, earnings] = await Promise.all([
     fetchAnalystEstimates(ticker, apiKey),
     fetchQuote(ticker, apiKey),
     fetchEnterpriseValue(ticker, apiKey),
     fetchKeyMetrics(ticker, apiKey),
     fetchIncomeStatement(ticker, apiKey),
+    fetchPriceTargets(ticker, apiKey),
+    fetchAnalystRatings(ticker, apiKey),
+    fetchFinancialGrowth(ticker, apiKey),
+    fetchEarningsCalendar(ticker, apiKey),
   ]);
 
   if (!estimates && !quote) {
@@ -384,6 +521,45 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       peRatio: metrics?.peRatio,
       evToEbitda: metrics?.evToEbitda,
     },
+
+    // Analyst price targets
+    priceTargets: priceTargets ? {
+      high: priceTargets.targetHigh,
+      low: priceTargets.targetLow,
+      consensus: priceTargets.targetConsensus,
+      median: priceTargets.targetMedian,
+      upside: price ? (priceTargets.targetConsensus - price) / price : null,
+    } : null,
+
+    // Analyst ratings (buy/hold/sell)
+    ratings: ratings ? {
+      strongBuy: ratings.strongBuy,
+      buy: ratings.buy,
+      hold: ratings.hold,
+      sell: ratings.sell,
+      strongSell: ratings.strongSell,
+      consensus: ratings.consensus,
+      totalAnalysts: (ratings.strongBuy || 0) + (ratings.buy || 0) + (ratings.hold || 0) + (ratings.sell || 0) + (ratings.strongSell || 0),
+    } : null,
+
+    // Historical growth rates (3Y average)
+    growth: growth ? {
+      revenue: growth.revenueGrowth,
+      eps: growth.epsgrowth,
+      ebit: growth.ebitgrowth,
+      netIncome: growth.netIncomeGrowth,
+      periods: growth.periods,
+    } : null,
+
+    // Earnings calendar and surprises
+    earnings: earnings ? {
+      nextDate: earnings.nextEarningsDate,
+      nextEpsEstimate: earnings.nextEpsEstimate,
+      lastSurprise: earnings.lastSurprise,
+      avgSurprise: earnings.avgSurprise,
+      beatCount: earnings.beatCount,
+      missCount: earnings.missCount,
+    } : null,
   };
 };
 
@@ -415,9 +591,11 @@ export const batchFetchConsensusData = async (tickers, apiKey, onProgress) => {
       onProgress(i + 1, total);
     }
 
-    // Small delay to avoid rate limiting (500ms between tickers)
+    // Delay between tickers to respect rate limits
+    // 9 API calls per ticker, 300 calls/min limit = ~33 tickers/min max
+    // Using 400ms delay = ~2.5 tickers/sec = safe margin
     if (i < tickers.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 400));
     }
   }
 
