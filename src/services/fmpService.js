@@ -99,39 +99,61 @@ const fetchFMP = async (endpoint, apiKey, timeout = 15000) => {
  */
 export const fetchAnalystEstimates = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/analyst-estimates?symbol=${ticker}&limit=2`, apiKey);
+    const data = await fetchFMP(`/analyst-estimates?symbol=${ticker}&period=annual&limit=2`, apiKey);
 
     if (!data || data.length === 0) {
+      console.warn('[FMP] No analyst estimates data for', ticker);
       return null;
     }
 
-    // Log first result to see field names
-    console.log('[FMP] Analyst estimates fields for', ticker, ':', Object.keys(data[0] || {}));
-    console.log('[FMP] Analyst estimates sample:', data[0]);
+    // Log FULL first result to see all field names and values
+    console.log('[FMP] ===== ANALYST ESTIMATES FOR', ticker, '=====');
+    console.log('[FMP] Full response:', JSON.stringify(data[0], null, 2));
 
     // FMP returns estimates sorted by date (most recent first)
     // FY1 = next fiscal year, FY2 = year after
     const fy1 = data[0] || {};
     const fy2 = data[1] || {};
 
+    // Try multiple possible field name variations
+    const getRevenue = (obj) =>
+      obj.estimatedRevenueAvg || obj.revenueAvg || obj.revenue ||
+      obj.estimatedRevenueLow || obj.estimatedRevenueHigh || 0;
+
+    const getEps = (obj) =>
+      obj.estimatedEpsAvg || obj.epsAvg || obj.eps ||
+      obj.estimatedEpsLow || obj.estimatedEpsHigh || 0;
+
+    const getNetIncome = (obj) =>
+      obj.estimatedNetIncomeAvg || obj.netIncomeAvg || obj.netIncome ||
+      obj.estimatedNetIncomeLow || obj.estimatedNetIncomeHigh || 0;
+
+    const getEbitda = (obj) =>
+      obj.estimatedEbitdaAvg || obj.ebitdaAvg || obj.ebitda ||
+      obj.estimatedEbitdaLow || obj.estimatedEbitdaHigh || 0;
+
+    const getEbit = (obj) =>
+      obj.estimatedEbitAvg || obj.ebitAvg || obj.ebit ||
+      obj.estimatedEbitLow || obj.estimatedEbitHigh || 0;
+
     return {
       fy1: {
         date: fy1.date,
-        revenue: fy1.estimatedRevenueAvg || fy1.revenueAvg || fy1.revenue,
+        revenue: getRevenue(fy1),
         grossProfit: fy1.estimatedGrossProfitAvg || fy1.grossProfitAvg || null,
-        ebit: fy1.estimatedEbitAvg || fy1.ebitAvg || fy1.ebit,
-        ebitda: fy1.estimatedEbitdaAvg || fy1.ebitdaAvg || fy1.ebitda,
-        netIncome: fy1.estimatedNetIncomeAvg || fy1.netIncomeAvg || fy1.netIncome,
-        eps: fy1.estimatedEpsAvg || fy1.epsAvg || fy1.eps,
+        ebit: getEbit(fy1),
+        ebitda: getEbitda(fy1),
+        netIncome: getNetIncome(fy1),
+        eps: getEps(fy1),
       },
       fy2: {
         date: fy2.date,
-        revenue: fy2.estimatedRevenueAvg || fy2.revenueAvg || fy2.revenue,
+        revenue: getRevenue(fy2),
         grossProfit: fy2.estimatedGrossProfitAvg || fy2.grossProfitAvg || null,
-        ebit: fy2.estimatedEbitAvg || fy2.ebitAvg || fy2.ebit,
-        ebitda: fy2.estimatedEbitdaAvg || fy2.ebitdaAvg || fy2.ebitda,
-        netIncome: fy2.estimatedNetIncomeAvg || fy2.netIncomeAvg || fy2.netIncome,
-        eps: fy2.estimatedEpsAvg || fy2.epsAvg || fy2.eps,
+        ebit: getEbit(fy2),
+        ebitda: getEbitda(fy2),
+        netIncome: getNetIncome(fy2),
+        eps: getEps(fy2),
       },
     };
   } catch (err) {
