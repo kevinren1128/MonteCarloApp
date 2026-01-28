@@ -6,6 +6,7 @@
  */
 
 export * from './yahooFinance';
+export * from './visionService';
 
 // Re-export main service objects for convenience
 export { default as yahooFinance } from './yahooFinance';

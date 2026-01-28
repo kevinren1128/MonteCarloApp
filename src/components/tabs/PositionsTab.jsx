@@ -67,6 +67,7 @@ const PositionsTab = memo(({
   
   // Add positions modal
   onOpenAddModal,
+  onOpenScreenshotImport,
   
   // Styles (kept for backwards compatibility but using local styles)
   styles: externalStyles,
@@ -321,6 +322,7 @@ const PositionsTab = memo(({
         setConfirmDialog={setConfirmDialog}
         addPosition={handleAddPosition}
         onOpenAddModal={onOpenAddModal}
+        onOpenScreenshotImport={onOpenScreenshotImport}
         newestPositionId={newestPositionId}
         editingPositionId={editingPositionId}
       />
@@ -775,6 +777,7 @@ const PositionsTableCard = memo(({
   setConfirmDialog,
   addPosition,
   onOpenAddModal,
+  onOpenScreenshotImport,
   newestPositionId,
   editingPositionId,
 }) => {
@@ -1239,6 +1242,29 @@ const PositionsTableCard = memo(({
             title="Add empty row for quick inline editing"
           >
             Quick Add Row
+          </button>
+        )}
+        {onOpenScreenshotImport && (
+          <button
+            onClick={onOpenScreenshotImport}
+            style={{
+              padding: '8px 12px',
+              fontSize: '10px',
+              fontWeight: '500',
+              borderRadius: '8px',
+              border: '1px solid rgba(155, 89, 182, 0.3)',
+              background: 'rgba(155, 89, 182, 0.1)',
+              color: COLORS.purple,
+              cursor: 'pointer',
+              fontFamily: FONT_FAMILY,
+              transition: 'all 0.2s ease',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+            title="Import positions from a screenshot using AI"
+          >
+            <span>📷</span> Screenshot Import
           </button>
         )}
       </div>

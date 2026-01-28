@@ -41,6 +41,7 @@ export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as KeyboardShortcuts } from './KeyboardShortcuts';
 export { default as UserGuide } from './UserGuide';
 export { default as AddPositionsModal } from './AddPositionsModal';
+export { default as ScreenshotImportModal } from './ScreenshotImportModal';
 export { default as CommandPalette } from './CommandPalette';
 export { default as CommandItem } from './CommandItem';
 export { default as RecoveryDialog } from './RecoveryDialog';

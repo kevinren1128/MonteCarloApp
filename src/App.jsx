@@ -5,7 +5,7 @@ import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Ba
 import {
   ToastProvider, useToast, setGlobalToastRef, toast,
   ConfirmDialog, EmptyState, KeyboardShortcuts, UserGuide,
-  AnimatedPortfolioValue, InfoTooltip, AddPositionsModal,
+  AnimatedPortfolioValue, InfoTooltip, AddPositionsModal, ScreenshotImportModal,
   CommandPalette, AutosaveIndicator, RecoveryDialog,
   Sidebar,
 } from './components/common';
@@ -2055,6 +2055,9 @@ function MonteCarloSimulator() {
 
   // Add positions modal
   const [showAddPositionsModal, setShowAddPositionsModal] = useState(false);
+
+  // Screenshot import modal
+  const [showScreenshotImportModal, setShowScreenshotImportModal] = useState(false);
 
   // Command palette (Cmd+K)
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -8054,7 +8057,8 @@ function MonteCarloSimulator() {
             
             // Add positions modal
             onOpenAddModal={() => setShowAddPositionsModal(true)}
-            
+            onOpenScreenshotImport={() => setShowScreenshotImportModal(true)}
+
             // Styles
             styles={styles}
           />
@@ -8361,6 +8365,15 @@ function MonteCarloSimulator() {
         isOpen={showAddPositionsModal}
         onClose={() => setShowAddPositionsModal(false)}
         onAddPositions={addPositionsBatch}
+        existingTickers={positions.map(p => p.ticker?.toUpperCase()).filter(Boolean)}
+        fetchPriceForTicker={fetchPriceForTicker}
+      />
+
+      {/* Screenshot Import Modal */}
+      <ScreenshotImportModal
+        isOpen={showScreenshotImportModal}
+        onClose={() => setShowScreenshotImportModal(false)}
+        onImportPositions={addPositionsBatch}
         existingTickers={positions.map(p => p.ticker?.toUpperCase()).filter(Boolean)}
         fetchPriceForTicker={fetchPriceForTicker}
       />
