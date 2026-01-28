@@ -7,6 +7,7 @@
 
 export * from './yahooFinance';
 export * from './visionService';
+export * from './fmpService';
 
 // Re-export main service objects for convenience
 export { default as yahooFinance } from './yahooFinance';

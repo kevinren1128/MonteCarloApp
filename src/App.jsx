@@ -24,7 +24,7 @@ import {
 } from './utils/crashRecovery';
 
 // Tab components (extracted for performance)
-import { CorrelationTab, SimulationTab, OptimizeTab, PositionsTab, FactorsTab, ExportTab, DistributionsTab } from './components/tabs';
+import { CorrelationTab, SimulationTab, OptimizeTab, PositionsTab, FactorsTab, ExportTab, DistributionsTab, ConsensusTab } from './components/tabs';
 
 // Styles (extracted to reduce file size)
 import { styles } from './styles/appStyles';
@@ -2176,7 +2176,7 @@ function MonteCarloSimulator() {
       
       // Number keys 1-7 for tab switching
       if (e.key >= '1' && e.key <= '7' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const tabs = ['positions', 'distributions', 'correlation', 'simulation', 'factors', 'optimize', 'export'];
+        const tabs = ['positions', 'consensus', 'distributions', 'correlation', 'simulation', 'factors', 'optimize', 'export'];
         const idx = parseInt(e.key) - 1;
         if (tabs[idx]) {
           e.preventDefault();
@@ -8060,6 +8060,12 @@ function MonteCarloSimulator() {
             onOpenScreenshotImport={() => setShowScreenshotImportModal(true)}
 
             // Styles
+            styles={styles}
+          />
+        )}
+        {activeTab === 'consensus' && (
+          <ConsensusTab
+            positions={positions}
             styles={styles}
           />
         )}
