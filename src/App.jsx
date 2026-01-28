@@ -3717,32 +3717,25 @@ function MonteCarloSimulator() {
     isBackgroundRefreshingRef.current = true;
 
     try {
-      // Fetch quotes in parallel with concurrency limit (background, no UI blocking)
-      const CONCURRENCY = 4;
+      // Fetch quotes sequentially with delays to avoid rate limiting
       const queue = [...new Set(tickers)]; // Unique tickers only
       const results = {};
+      const DELAY_MS = 300; // Delay between requests to avoid 429 errors
 
-      const worker = async () => {
-        while (queue.length > 0) {
-          const ticker = queue.shift();
-          if (!ticker) continue;
-          try {
-            const quote = await fetchYahooQuote(ticker);
-            if (quote?.price) {
-              results[ticker] = quote;
-            }
-          } catch (e) {
-            // Silently ignore errors in background refresh
+      for (const ticker of queue) {
+        try {
+          const quote = await fetchYahooQuote(ticker);
+          if (quote?.price) {
+            results[ticker] = quote;
           }
+        } catch (e) {
+          // Silently ignore errors in background refresh
         }
-      };
-
-      // Create worker pool
-      const workers = Array(Math.min(CONCURRENCY, queue.length))
-        .fill(null)
-        .map(() => worker());
-
-      await Promise.all(workers);
+        // Add delay between requests to avoid rate limiting
+        if (queue.indexOf(ticker) < queue.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+        }
+      }
 
       // Identify non-USD currencies that need exchange rates
       const nonUsdCurrencies = new Set();

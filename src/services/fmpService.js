@@ -77,8 +77,8 @@ const fetchFMP = async (endpoint, apiKey, timeout = 10000) => {
 
   console.log('[FMP] Fetching:', endpoint);
 
-  // Create a promise for each proxy that races with a timeout
-  const promises = CORS_PROXIES.map(async (proxy) => {
+  // Try each proxy sequentially to avoid rate limiting
+  for (const proxy of CORS_PROXIES) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -98,24 +98,19 @@ const fetchFMP = async (endpoint, apiKey, timeout = 10000) => {
           if (data['Error Message']) {
             throw new Error(data['Error Message']);
           }
+          console.log('[FMP] Response for', endpoint, ':', Array.isArray(data) ? `${data.length} items` : 'object');
           return data;
         }
       }
-      throw new Error(`${proxy.name}: Invalid response`);
+      // Response not ok, try next proxy
     } catch (e) {
       clearTimeout(timeoutId);
-      throw e;
+      // Request failed, try next proxy
     }
-  });
-
-  try {
-    const data = await Promise.any(promises);
-    console.log('[FMP] Response for', endpoint, ':', Array.isArray(data) ? `${data.length} items` : 'object');
-    return data;
-  } catch (e) {
-    console.error('[FMP] All proxies failed for:', endpoint);
-    throw new Error(`Failed to fetch ${endpoint}`);
   }
+
+  console.error('[FMP] All proxies failed for:', endpoint);
+  throw new Error(`Failed to fetch ${endpoint}`);
 };
 
 /**

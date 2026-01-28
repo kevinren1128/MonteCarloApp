@@ -34,15 +34,15 @@ const CORS_PROXIES = [
 ];
 
 /**
- * Fetch data from Yahoo Finance with CORS proxy racing
- * Uses Promise.any() to race all proxies simultaneously - returns fastest successful response
+ * Fetch data from Yahoo Finance with CORS proxy fallback
+ * Tries proxies sequentially to avoid rate limiting (429 errors)
  * @param {string} url - Yahoo Finance API URL
  * @param {number} timeout - Timeout in ms per proxy (default: 8000)
  * @returns {Promise<Object|null>} Parsed JSON response or null on failure
  */
 export const fetchYahooData = async (url, timeout = 8000) => {
-  // Create a promise for each proxy that races with a timeout
-  const promises = CORS_PROXIES.map(async (proxy) => {
+  // Try each proxy sequentially (not racing) to avoid rate limiting
+  for (const proxy of CORS_PROXIES) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -55,21 +55,16 @@ export const fetchYahooData = async (url, timeout = 8000) => {
         const data = await proxy.parseResponse(response);
         if (data) return data;
       }
-      throw new Error(`${proxy.name}: Invalid response`);
+      // Response not ok, try next proxy
     } catch (e) {
       clearTimeout(timeoutId);
-      throw e; // Re-throw so Promise.any() can try next
+      // Request failed, try next proxy
     }
-  });
-
-  try {
-    // Race all proxies - first successful response wins
-    return await Promise.any(promises);
-  } catch (e) {
-    // All proxies failed
-    console.warn('All CORS proxies failed for:', url.slice(0, 80) + '...');
-    return null;
   }
+
+  // All proxies failed
+  console.warn('All CORS proxies failed for:', url.slice(0, 80) + '...');
+  return null;
 };
 
 /**
