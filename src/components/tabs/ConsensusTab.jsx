@@ -15,7 +15,7 @@ import {
   fetchMissingConsensusData,
 } from '../../services/fmpService';
 
-// Storage key for persisting consensus data
+// Storage keys for localStorage persistence
 const CONSENSUS_STORAGE_KEY = 'monte-carlo-consensus-data';
 const CONSENSUS_TIMESTAMP_KEY = 'monte-carlo-consensus-timestamp';
 
@@ -24,6 +24,7 @@ const saveConsensusData = (data) => {
   try {
     localStorage.setItem(CONSENSUS_STORAGE_KEY, JSON.stringify(data));
     localStorage.setItem(CONSENSUS_TIMESTAMP_KEY, Date.now().toString());
+    console.log('[Consensus] Saved data for', Object.keys(data).length, 'tickers');
   } catch (err) {
     console.warn('Failed to save consensus data:', err);
   }
@@ -69,9 +70,9 @@ const formatNumber = (num, decimals = 0) => {
   return `$${num.toLocaleString(undefined, { maximumFractionDigits: decimals })}`;
 };
 
-const formatPct = (num, showSign = false) => {
+const formatPct = (num, showSign = false, decimals = 1) => {
   if (num === null || num === undefined || isNaN(num)) return '—';
-  const pct = (num * 100).toFixed(1);
+  const pct = (num * 100).toFixed(decimals);
   if (showSign && num > 0) return `+${pct}%`;
   return `${pct}%`;
 };
@@ -188,14 +189,18 @@ const PiotroskiBadge = memo(({ score }) => {
   return <Badge color={color} small>{score}/9</Badge>;
 });
 
-const Cell = memo(({ value, color, sub, align = 'right' }) => (
-  <td style={{ padding: '6px 5px', fontSize: '10px', textAlign: align, verticalAlign: 'middle' }}>
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: align === 'right' ? 'flex-end' : 'flex-start' }}>
-      <span style={{ color: color || 'rgba(255,255,255,0.85)', fontWeight: color ? '600' : '400' }}>{value}</span>
-      {sub && <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>{sub}</span>}
-    </div>
-  </td>
-));
+const Cell = memo(({ value, color, sub, align = 'right' }) => {
+  // Auto-detect percentage values and italicize them
+  const isPercentage = typeof value === 'string' && value.includes('%');
+  return (
+    <td style={{ padding: '10px 8px', fontSize: '12px', textAlign: align, verticalAlign: 'middle' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: align === 'right' ? 'flex-end' : 'flex-start' }}>
+        <span style={{ color: color || 'rgba(255,255,255,0.9)', fontWeight: color ? '600' : '500', fontStyle: isPercentage ? 'italic' : 'normal' }}>{value}</span>
+        {sub && <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)' }}>{sub}</span>}
+      </div>
+    </td>
+  );
+});
 
 // View tabs
 const VIEW_TABS = [
@@ -229,7 +234,7 @@ const ConsensusTab = memo(({ positions, styles }) => {
       setApiKeyInput(savedKey);
     }
 
-    // Load persisted consensus data
+    // Load persisted consensus data from localStorage
     const { data, timestamp } = loadConsensusData();
     if (data && Object.keys(data).length > 0) {
       setConsensusData(data);
@@ -259,6 +264,40 @@ const ConsensusTab = memo(({ positions, styles }) => {
     setIsValidatingKey(false);
   };
 
+  // Validate fetched data - log any suspicious values
+  const validateData = useCallback((data) => {
+    const issues = [];
+    for (const [ticker, tickerData] of Object.entries(data)) {
+      if (!tickerData || tickerData.isEtf || tickerData.failed) continue;
+
+      // Check for potentially wrong revenue (should be in billions for most large caps)
+      const fy1Rev = tickerData.fy1?.revenue;
+      if (fy1Rev && fy1Rev < 1e6) {
+        issues.push(`${ticker}: FY1 revenue seems too low (${fy1Rev})`);
+      }
+
+      // Check fiscal year dates are in the future
+      const fy1Date = tickerData.fy1?.date;
+      if (fy1Date) {
+        const today = new Date().toISOString().split('T')[0];
+        if (fy1Date < today) {
+          issues.push(`${ticker}: FY1 date ${fy1Date} is in the past`);
+        }
+      }
+
+      // Check forward P/E is reasonable (between 0 and 200)
+      const fwdPE = tickerData.multiples?.forwardPE;
+      if (fwdPE && (fwdPE < 0 || fwdPE > 200)) {
+        issues.push(`${ticker}: Forward P/E seems unusual (${fwdPE?.toFixed(1)})`);
+      }
+    }
+
+    if (issues.length > 0) {
+      console.warn('[Consensus] Data validation issues:', issues);
+    }
+    return issues;
+  }, []);
+
   // Fetch data (refresh all)
   const handleFetchData = useCallback(async () => {
     if (!apiKey || !tickers.length) return;
@@ -269,13 +308,18 @@ const ConsensusTab = memo(({ positions, styles }) => {
       const data = await batchFetchConsensusData(tickers, apiKey, (current, total, ticker) =>
         setLoadingProgress({ current, total, ticker })
       );
+
+      // Validate data before saving
+      validateData(data);
+
       setConsensusData(data);
       setLastUpdated(new Date());
+
       // Persist to localStorage
       saveConsensusData(data);
     } catch (err) { setError(err.message); }
     setIsLoading(false);
-  }, [apiKey, tickers]);
+  }, [apiKey, tickers, validateData]);
 
   // Fetch only missing/failed tickers
   const handleRetryFailed = useCallback(async () => {
@@ -289,12 +333,16 @@ const ConsensusTab = memo(({ positions, styles }) => {
         apiKey,
         (current, total, ticker) => setLoadingProgress({ current, total, ticker })
       );
+
+      // Validate data before saving
+      validateData(updatedData);
+
       setConsensusData(updatedData);
       setLastUpdated(new Date());
       saveConsensusData(updatedData);
     } catch (err) { setError(err.message); }
     setIsLoading(false);
-  }, [apiKey, tickers, consensusData]);
+  }, [apiKey, tickers, consensusData, validateData]);
 
   // Sorting
   const sortedData = useMemo(() => {
@@ -308,9 +356,9 @@ const ConsensusTab = memo(({ positions, styles }) => {
           case 'price': aVal = a.price || 0; bVal = b.price || 0; break;
           case 'upside': aVal = a.priceTargets?.upside ?? -999; bVal = b.priceTargets?.upside ?? -999; break;
           case 'revenue': aVal = a.fy1?.revenue || 0; bVal = b.fy1?.revenue || 0; break;
-          case 'revGrowth': aVal = calcGrowth(a.fy1?.revenue, a.fy2?.revenue) ?? -999; bVal = calcGrowth(b.fy1?.revenue, b.fy2?.revenue) ?? -999; break;
+          case 'revGrowth': aVal = calcGrowth(a.fy0?.revenue, a.fy1?.revenue) ?? -999; bVal = calcGrowth(b.fy0?.revenue, b.fy1?.revenue) ?? -999; break;
           case 'eps': aVal = a.fy1?.eps || 0; bVal = b.fy1?.eps || 0; break;
-          case 'epsGrowth': aVal = calcGrowth(a.fy1?.eps, a.fy2?.eps) ?? -999; bVal = calcGrowth(b.fy1?.eps, b.fy2?.eps) ?? -999; break;
+          case 'epsGrowth': aVal = calcGrowth(a.fy0?.eps, a.fy1?.eps) ?? -999; bVal = calcGrowth(b.fy0?.eps, b.fy1?.eps) ?? -999; break;
           case 'pe': aVal = a.multiples?.forwardPE ?? 999; bVal = b.multiples?.forwardPE ?? 999; break;
           case 'evEbitda': aVal = a.multiples?.evToEbitda ?? 999; bVal = b.multiples?.evToEbitda ?? 999; break;
           case 'roe': aVal = a.profitability?.roe ?? -999; bVal = b.profitability?.roe ?? -999; break;
@@ -360,11 +408,141 @@ const ConsensusTab = memo(({ positions, styles }) => {
     };
   }, [sortedData]);
 
+  // Get dominant FY labels from data for column headers (must be before early returns)
+  const fyLabels = useMemo(() => {
+    if (!sortedData.length) {
+      return { fy1: 'FY1', fy2: 'FY2', fy1Full: '', fy2Full: '' };
+    }
+    // Find the most common FY1/FY2 fiscal years across all tickers
+    const fy1Years = {};
+    const fy2Years = {};
+
+    sortedData.forEach(row => {
+      const fy1Year = row.fy1?.fiscalYear || (row.fy1?.date ? parseInt(row.fy1.date.substring(0, 4)) : null);
+      const fy2Year = row.fy2?.fiscalYear || (row.fy2?.date ? parseInt(row.fy2.date.substring(0, 4)) : null);
+      if (fy1Year) fy1Years[fy1Year] = (fy1Years[fy1Year] || 0) + 1;
+      if (fy2Year) fy2Years[fy2Year] = (fy2Years[fy2Year] || 0) + 1;
+    });
+
+    // Get most common years
+    const fy1 = Object.entries(fy1Years).sort((a, b) => b[1] - a[1])[0]?.[0] || 'FY1';
+    const fy2 = Object.entries(fy2Years).sort((a, b) => b[1] - a[1])[0]?.[0] || 'FY2';
+
+    return {
+      fy1: fy1 ? `FY${String(fy1).slice(-2)}` : 'FY1',
+      fy2: fy2 ? `FY${String(fy2).slice(-2)}` : 'FY2',
+      fy1Full: fy1,
+      fy2Full: fy2,
+    };
+  }, [sortedData]);
+
+  // Build combined time series for a ticker (must be before early returns)
+  const buildTimeSeries = useCallback((row) => {
+    const seriesMap = new Map(); // Use map to handle deduplication, preferring estimates
+
+    // Helper to calculate margin safely
+    const calcMargin = (num, denom) => {
+      if (!num || !denom || denom === 0) return null;
+      return num / denom;
+    };
+
+    // Add historical data first (will be overwritten by estimates if same year)
+    const historical = row.timeSeries?.historical || [];
+    // Sort historical by year ascending (oldest first)
+    const sortedHistorical = [...historical].sort((a, b) => (a.year || 0) - (b.year || 0));
+
+    // Build a map of FCF by year from cash flow historical data
+    const fcfByYear = {};
+    const cashFlowHistorical = row.cashFlow?.historical || [];
+    cashFlowHistorical.forEach((cf) => {
+      if (cf.year) {
+        fcfByYear[cf.year] = {
+          freeCashFlow: cf.freeCashFlow,
+          fcfConversion: cf.fcfConversion,
+          capitalExpenditure: cf.capitalExpenditure,
+          operatingCashFlow: cf.operatingCashFlow,
+        };
+      }
+    });
+
+    sortedHistorical.forEach((h) => {
+      if (h.year) {
+        const cfData = fcfByYear[h.year] || {};
+        seriesMap.set(h.year, {
+          year: h.year,
+          label: `FY${String(h.year).slice(-2)}`,
+          isEstimate: false,
+          revenue: h.revenue,
+          ebitda: h.ebitda,
+          ebitdaMargin: calcMargin(h.ebitda, h.revenue),
+          operatingIncome: h.operatingIncome,
+          ebitMargin: h.operatingMargin ?? calcMargin(h.operatingIncome, h.revenue),
+          netIncome: h.netIncome,
+          netMargin: h.netMargin ?? calcMargin(h.netIncome, h.revenue),
+          eps: h.eps,
+          grossMargin: h.grossMargin,
+          capitalExpenditure: cfData.capitalExpenditure,
+          capexRatio: calcMargin(Math.abs(cfData.capitalExpenditure || 0), h.revenue),
+          freeCashFlow: cfData.freeCashFlow,
+          fcfMargin: calcMargin(cfData.freeCashFlow, h.revenue),
+        });
+      }
+    });
+
+    // Add forward estimates (overwrite historical for same year - estimates are more relevant)
+    const forward = row.timeSeries?.forward || [];
+    forward.forEach((f) => {
+      if (f.fiscalYear) {
+        // Calculate margins from the estimate values directly
+        const revenue = f.revenue || 0;
+        const ebitda = f.ebitda || 0;
+        const ebit = f.ebit || 0;
+        const netIncome = f.netIncome || 0;
+
+        seriesMap.set(f.fiscalYear, {
+          year: f.fiscalYear,
+          label: `FY${String(f.fiscalYear).slice(-2)}E`,
+          isEstimate: true,
+          revenue: revenue,
+          ebitda: ebitda,
+          ebitdaMargin: calcMargin(ebitda, revenue),
+          operatingIncome: ebit,
+          ebitMargin: calcMargin(ebit, revenue),
+          netIncome: netIncome,
+          netMargin: calcMargin(netIncome, revenue),
+          eps: f.eps,
+          grossMargin: f.grossMargin,
+          // CapEx and FCF not available in forward estimates
+          capitalExpenditure: null,
+          capexRatio: null,
+          freeCashFlow: null,
+          fcfMargin: null,
+        });
+      }
+    });
+
+    // Convert map to array, sorted by year
+    const series = Array.from(seriesMap.values()).sort((a, b) => a.year - b.year);
+
+    // Keep last 7 periods max (e.g., FY21, FY22, FY23, FY24, FY25E, FY26E, FY27E)
+    return series.slice(-7);
+  }, []);
+
+  // Calculate YoY growth for a metric
+  const calcYoYGrowth = useCallback((series, idx, field) => {
+    if (idx === 0) return null;
+    const curr = series[idx][field];
+    const prev = series[idx - 1][field];
+    if (!curr || !prev || prev === 0) return null;
+    return (curr - prev) / Math.abs(prev);
+  }, []);
+
   // Styles
   const thStyle = {
-    padding: '6px 5px', textAlign: 'left', fontSize: '9px', fontWeight: '600',
-    color: 'rgba(255,255,255,0.5)', borderBottom: '1px solid rgba(255,255,255,0.08)',
+    padding: '12px 8px', textAlign: 'left', fontSize: '11px', fontWeight: '700',
+    color: 'rgba(255,255,255,0.7)', borderBottom: '2px solid rgba(255,255,255,0.15)',
     cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
+    textTransform: 'uppercase', letterSpacing: '0.3px',
   };
 
   const SortIcon = ({ col }) => sortBy === col ? <span style={{ opacity: 0.7, marginLeft: '2px' }}>{sortDir === 'asc' ? '↑' : '↓'}</span> : null;
@@ -411,53 +589,52 @@ const ConsensusTab = memo(({ positions, styles }) => {
 
     if (viewTab === 'estimates') {
       return [...common,
-        <th key="rev" onClick={() => handleSort('revenue')} style={{ ...thStyle, textAlign: 'right' }}>Revenue<SortIcon col="revenue" /></th>,
-        <th key="revG" onClick={() => handleSort('revGrowth')} style={{ ...thStyle, textAlign: 'right' }}>Rev Gr<SortIcon col="revGrowth" /></th>,
-        <th key="eps" onClick={() => handleSort('eps')} style={{ ...thStyle, textAlign: 'right' }}>EPS<SortIcon col="eps" /></th>,
-        <th key="epsG" onClick={() => handleSort('epsGrowth')} style={{ ...thStyle, textAlign: 'right' }}>EPS Gr<SortIcon col="epsGrowth" /></th>,
-        <th key="ebit" style={{ ...thStyle, textAlign: 'right' }}>EBIT%</th>,
-        <th key="net" style={{ ...thStyle, textAlign: 'right' }}>Net%</th>,
-        <th key="earn" style={{ ...thStyle, textAlign: 'center' }}>Earnings</th>,
-        <th key="surp" style={{ ...thStyle, textAlign: 'center' }}>Surprise</th>,
+        <th key="rev" onClick={() => handleSort('revenue')} style={{ ...thStyle, textAlign: 'right' }} title={`Forward Revenue (${fyLabels.fy1Full})`}>{fyLabels.fy1} Rev<SortIcon col="revenue" /></th>,
+        <th key="revG" onClick={() => handleSort('revGrowth')} style={{ ...thStyle, textAlign: 'right' }} title={`YoY Revenue Growth (prior year to ${fyLabels.fy1})`}>YoY Rev<SortIcon col="revGrowth" /></th>,
+        <th key="eps" onClick={() => handleSort('eps')} style={{ ...thStyle, textAlign: 'right' }} title={`Forward EPS (${fyLabels.fy1Full})`}>{fyLabels.fy1} EPS<SortIcon col="eps" /></th>,
+        <th key="epsG" onClick={() => handleSort('epsGrowth')} style={{ ...thStyle, textAlign: 'right' }} title={`YoY EPS Growth (prior year to ${fyLabels.fy1})`}>YoY EPS<SortIcon col="epsGrowth" /></th>,
+        <th key="ebit" style={{ ...thStyle, textAlign: 'right' }} title={`${fyLabels.fy1} EBIT Margin = EBIT / Revenue`}>{fyLabels.fy1} EBIT%</th>,
+        <th key="net" style={{ ...thStyle, textAlign: 'right' }} title={`${fyLabels.fy1} Net Margin = Net Income / Revenue`}>{fyLabels.fy1} Net%</th>,
+        <th key="earn" style={{ ...thStyle, textAlign: 'center' }} title="Next Earnings Date">Next Earn</th>,
+        <th key="surp" style={{ ...thStyle, textAlign: 'center' }} title="Average EPS Surprise (last 4 quarters)">Avg Surp</th>,
       ];
     }
 
     if (viewTab === 'valuation') {
       return [...common,
-        <th key="pe" onClick={() => handleSort('pe')} style={{ ...thStyle, textAlign: 'right' }}>Fwd P/E<SortIcon col="pe" /></th>,
-        <th key="evE" onClick={() => handleSort('evEbitda')} style={{ ...thStyle, textAlign: 'right' }}>EV/EBITDA<SortIcon col="evEbitda" /></th>,
-        <th key="evEbit" style={{ ...thStyle, textAlign: 'right' }}>EV/EBIT</th>,
-        <th key="ps" style={{ ...thStyle, textAlign: 'right' }}>P/S</th>,
-        <th key="pfcf" style={{ ...thStyle, textAlign: 'right' }}>P/FCF</th>,
-        <th key="pb" style={{ ...thStyle, textAlign: 'right' }}>P/B</th>,
-        <th key="divY" style={{ ...thStyle, textAlign: 'right' }}>Div Yld</th>,
-        <th key="fcfY" style={{ ...thStyle, textAlign: 'right' }}>FCF Yld</th>,
+        <th key="mktcap" style={{ ...thStyle, textAlign: 'right' }} title="Market Capitalization">Mkt Cap</th>,
+        <th key="ev" style={{ ...thStyle, textAlign: 'right' }} title="Enterprise Value = Market Cap + Debt - Cash">EV</th>,
+        <th key="pe" onClick={() => handleSort('pe')} style={{ ...thStyle, textAlign: 'right' }} title={`Forward P/E = Price / ${fyLabels.fy1} EPS`}>{fyLabels.fy1} P/E<SortIcon col="pe" /></th>,
+        <th key="evE" onClick={() => handleSort('evEbitda')} style={{ ...thStyle, textAlign: 'right' }} title={`EV/EBITDA = Enterprise Value / ${fyLabels.fy1} EBITDA`}>{fyLabels.fy1} EV/EBITDA<SortIcon col="evEbitda" /></th>,
+        <th key="ps" style={{ ...thStyle, textAlign: 'right' }} title={`P/S = Market Cap / ${fyLabels.fy1} Revenue`}>{fyLabels.fy1} P/S</th>,
+        <th key="pfcf" style={{ ...thStyle, textAlign: 'right' }} title="P/FCF = Price / TTM Free Cash Flow per Share">TTM P/FCF</th>,
+        <th key="fcfY" style={{ ...thStyle, textAlign: 'right' }} title="TTM FCF Yield = FCF per Share / Price">TTM FCF%</th>,
       ];
     }
 
     if (viewTab === 'profitability') {
       return [...common,
-        <th key="gm" style={{ ...thStyle, textAlign: 'right' }}>Gross%</th>,
-        <th key="om" style={{ ...thStyle, textAlign: 'right' }}>EBIT%</th>,
-        <th key="nm" style={{ ...thStyle, textAlign: 'right' }}>Net%</th>,
-        <th key="roe" onClick={() => handleSort('roe')} style={{ ...thStyle, textAlign: 'right' }}>ROE<SortIcon col="roe" /></th>,
-        <th key="roa" style={{ ...thStyle, textAlign: 'right' }}>ROA</th>,
-        <th key="roic" style={{ ...thStyle, textAlign: 'right' }}>ROIC</th>,
-        <th key="revHG" style={{ ...thStyle, textAlign: 'right' }}>Rev 3Y</th>,
-        <th key="epsHG" style={{ ...thStyle, textAlign: 'right' }}>EPS 3Y</th>,
+        <th key="gm" style={{ ...thStyle, textAlign: 'right' }} title="TTM Gross Profit Margin">TTM Gross%</th>,
+        <th key="om" style={{ ...thStyle, textAlign: 'right' }} title="TTM Operating (EBIT) Margin">TTM EBIT%</th>,
+        <th key="nm" style={{ ...thStyle, textAlign: 'right' }} title="TTM Net Profit Margin">TTM Net%</th>,
+        <th key="roe" onClick={() => handleSort('roe')} style={{ ...thStyle, textAlign: 'right' }} title="TTM Return on Equity">TTM ROE<SortIcon col="roe" /></th>,
+        <th key="roa" style={{ ...thStyle, textAlign: 'right' }} title="TTM Return on Assets">TTM ROA</th>,
+        <th key="roic" style={{ ...thStyle, textAlign: 'right' }} title="TTM Return on Invested Capital">TTM ROIC</th>,
+        <th key="revHG" style={{ ...thStyle, textAlign: 'right' }} title="3-Year Average Annual Revenue Growth">3Y Rev CAGR</th>,
+        <th key="epsHG" style={{ ...thStyle, textAlign: 'right' }} title="3-Year Average Annual EPS Growth">3Y EPS CAGR</th>,
       ];
     }
 
     if (viewTab === 'health') {
       return [...common,
-        <th key="zScore" onClick={() => handleSort('zScore')} style={{ ...thStyle, textAlign: 'center' }}>Z-Score<SortIcon col="zScore" /></th>,
-        <th key="piotr" onClick={() => handleSort('piotroski')} style={{ ...thStyle, textAlign: 'center' }}>Piotroski<SortIcon col="piotroski" /></th>,
-        <th key="de" style={{ ...thStyle, textAlign: 'right' }}>D/E</th>,
-        <th key="curr" style={{ ...thStyle, textAlign: 'right' }}>Current</th>,
-        <th key="quick" style={{ ...thStyle, textAlign: 'right' }}>Quick</th>,
-        <th key="intCov" style={{ ...thStyle, textAlign: 'right' }}>Int Cov</th>,
-        <th key="payout" style={{ ...thStyle, textAlign: 'right' }}>Payout%</th>,
-        <th key="fcfps" style={{ ...thStyle, textAlign: 'right' }}>FCF/Sh</th>,
+        <th key="zScore" onClick={() => handleSort('zScore')} style={{ ...thStyle, textAlign: 'center' }} title="Altman Z-Score: >2.99 Safe, 1.81-2.99 Grey, <1.81 Distress">Z-Score<SortIcon col="zScore" /></th>,
+        <th key="piotr" onClick={() => handleSort('piotroski')} style={{ ...thStyle, textAlign: 'center' }} title="Piotroski F-Score (0-9): ≥7 Strong, 4-6 Moderate, <4 Weak">Piotroski<SortIcon col="piotroski" /></th>,
+        <th key="de" style={{ ...thStyle, textAlign: 'right' }} title="Debt to Equity Ratio">D/E</th>,
+        <th key="curr" style={{ ...thStyle, textAlign: 'right' }} title="Current Ratio = Current Assets / Current Liabilities">Current</th>,
+        <th key="quick" style={{ ...thStyle, textAlign: 'right' }} title="Quick Ratio = (Current Assets - Inventory) / Current Liabilities">Quick</th>,
+        <th key="intCov" style={{ ...thStyle, textAlign: 'right' }} title="Interest Coverage = EBIT / Interest Expense">Int Cov</th>,
+        <th key="payout" style={{ ...thStyle, textAlign: 'right' }} title="Dividend Payout Ratio">Payout%</th>,
+        <th key="fcfps" style={{ ...thStyle, textAlign: 'right' }} title="TTM Free Cash Flow per Share">FCF/Sh</th>,
       ];
     }
 
@@ -465,8 +642,9 @@ const ConsensusTab = memo(({ positions, styles }) => {
   };
 
   const renderTableRow = (row) => {
-    const revGrowth = calcGrowth(row.fy1?.revenue, row.fy2?.revenue);
-    const epsGrowth = calcGrowth(row.fy1?.eps, row.fy2?.eps);
+    // Calculate YoY growth: prior year (fy0) to current estimate year (fy1)
+    const revGrowth = calcGrowth(row.fy0?.revenue, row.fy1?.revenue);
+    const epsGrowth = calcGrowth(row.fy0?.eps, row.fy1?.eps);
     const upside = row.priceTargets?.upside;
     const isExpanded = expandedRows.has(row.ticker);
 
@@ -510,8 +688,8 @@ const ConsensusTab = memo(({ positions, styles }) => {
     const upsideCell = (
       <td key="upside" style={{ padding: '6px 5px', fontSize: '10px', textAlign: 'right' }}>
         {upside != null ? (
-          <span style={{ color: getUpsideColor(upside), fontWeight: '600' }}>
-            {upside > 0 ? '+' : ''}{(upside * 100).toFixed(0)}%
+          <span style={{ color: getUpsideColor(upside), fontWeight: '600', fontStyle: 'italic' }}>
+            {upside > 0 ? '+' : ''}{(upside * 100).toFixed(1)}%
           </span>
         ) : '—'}
       </td>
@@ -527,12 +705,28 @@ const ConsensusTab = memo(({ positions, styles }) => {
 
     if (viewTab === 'estimates') {
       return [...common,
-        <Cell key="rev" value={formatNumber(row.fy1?.revenue)} sub={getFyLabel(row.fy1?.fiscalYear)} />,
-        <Cell key="revG" value={revGrowth != null ? `${revGrowth > 0 ? '+' : ''}${(revGrowth * 100).toFixed(0)}%` : '—'} color={getGrowthColor(revGrowth)} />,
-        <Cell key="eps" value={row.fy1?.eps != null ? `$${row.fy1.eps.toFixed(2)}` : '—'} sub={getFyLabel(row.fy1?.fiscalYear)} />,
-        <Cell key="epsG" value={epsGrowth != null ? `${epsGrowth > 0 ? '+' : ''}${(epsGrowth * 100).toFixed(0)}%` : '—'} color={getGrowthColor(epsGrowth)} />,
-        <Cell key="ebit" value={formatPct(row.fy1?.ebitMargin)} color={getMarginColor(row.fy1?.ebitMargin)} />,
-        <Cell key="net" value={formatPct(row.fy1?.netMargin)} color={getMarginColor(row.fy1?.netMargin, { good: 0.15, ok: 0.05 })} />,
+        <Cell key="rev" value={formatNumber(row.fy1?.revenue)} />,
+        <td key="revG" style={{ padding: '6px 5px', fontSize: '10px', textAlign: 'right' }}>
+          <span style={{ color: getGrowthColor(revGrowth), fontWeight: '600', fontStyle: 'italic' }}>
+            {revGrowth != null ? `${revGrowth > 0 ? '+' : ''}${(revGrowth * 100).toFixed(1)}%` : '—'}
+          </span>
+        </td>,
+        <Cell key="eps" value={row.fy1?.eps != null ? `$${row.fy1.eps.toFixed(2)}` : '—'} />,
+        <td key="epsG" style={{ padding: '6px 5px', fontSize: '10px', textAlign: 'right' }}>
+          <span style={{ color: getGrowthColor(epsGrowth), fontWeight: '600', fontStyle: 'italic' }}>
+            {epsGrowth != null ? `${epsGrowth > 0 ? '+' : ''}${(epsGrowth * 100).toFixed(1)}%` : '—'}
+          </span>
+        </td>,
+        <td key="ebit" style={{ padding: '6px 5px', fontSize: '10px', textAlign: 'right' }}>
+          <span style={{ color: getMarginColor(row.fy1?.ebitMargin), fontStyle: 'italic' }}>
+            {formatPct(row.fy1?.ebitMargin)}
+          </span>
+        </td>,
+        <td key="net" style={{ padding: '6px 5px', fontSize: '10px', textAlign: 'right' }}>
+          <span style={{ color: getMarginColor(row.fy1?.netMargin, { good: 0.15, ok: 0.05 }), fontStyle: 'italic' }}>
+            {formatPct(row.fy1?.netMargin)}
+          </span>
+        </td>,
         <td key="earn" style={{ padding: '6px 5px', textAlign: 'center', fontSize: '10px' }}>
           {row.earnings?.nextDate ? (
             <Badge color={COLORS.cyan} small>{row.earnings.nextDate.slice(5)}</Badge>
@@ -540,9 +734,9 @@ const ConsensusTab = memo(({ positions, styles }) => {
         </td>,
         <td key="surp" style={{ padding: '6px 5px', textAlign: 'center', fontSize: '10px' }}>
           {row.earnings?.avgSurprise != null ? (
-            <span style={{ color: row.earnings.avgSurprise > 0 ? COLORS.green : COLORS.red, fontWeight: '600' }}>
-              {row.earnings.avgSurprise > 0 ? '+' : ''}{(row.earnings.avgSurprise * 100).toFixed(0)}%
-              <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)', marginLeft: '2px' }}>({row.earnings.beatCount}B/{row.earnings.missCount}M)</span>
+            <span style={{ color: row.earnings.avgSurprise > 0 ? COLORS.green : COLORS.red, fontWeight: '600', fontStyle: 'italic' }}>
+              {row.earnings.avgSurprise > 0 ? '+' : ''}{(row.earnings.avgSurprise * 100).toFixed(1)}%
+              <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)', marginLeft: '2px', fontStyle: 'normal' }}>({row.earnings.beatCount}B/{row.earnings.missCount}M)</span>
             </span>
           ) : '—'}
         </td>,
@@ -551,14 +745,13 @@ const ConsensusTab = memo(({ positions, styles }) => {
 
     if (viewTab === 'valuation') {
       return [...common,
+        <Cell key="mktcap" value={formatNumber(row.marketCap)} />,
+        <Cell key="ev" value={formatNumber(row.enterpriseValue)} />,
         <Cell key="pe" value={formatMult(row.multiples?.forwardPE)} color={getMultColor(row.multiples?.forwardPE)} />,
         <Cell key="evE" value={formatMult(row.multiples?.evToEbitda)} color={getMultColor(row.multiples?.evToEbitda, { cheap: 10, fair: 15 })} />,
-        <Cell key="evEbit" value={formatMult(row.multiples?.evToEbit)} />,
         <Cell key="ps" value={formatMult(row.multiples?.priceToSales)} />,
         <Cell key="pfcf" value={formatMult(row.cashFlow?.priceToFCF)} />,
-        <Cell key="pb" value={formatMult(row.cashFlow?.priceToBook || row.historical?.pbRatio)} />,
-        <Cell key="divY" value={row.cashFlow?.dividendYield != null ? formatPct(row.cashFlow.dividendYield) : '—'} color={row.cashFlow?.dividendYield > 0.02 ? COLORS.green : undefined} />,
-        <Cell key="fcfY" value={row.profitability?.freeCashFlowYield != null ? formatPct(row.profitability.freeCashFlowYield) : '—'} color={row.profitability?.freeCashFlowYield > 0.05 ? COLORS.green : undefined} />,
+        <Cell key="fcfY" value={row.profitability?.freeCashFlowYield != null ? formatPct(row.profitability.freeCashFlowYield) : (row.cashFlow?.fcfMargin != null ? formatPct(row.cashFlow.fcfMargin) : '—')} color={row.profitability?.freeCashFlowYield > 0.05 || row.cashFlow?.fcfMargin > 0.05 ? COLORS.green : undefined} />,
       ];
     }
 
@@ -593,19 +786,450 @@ const ConsensusTab = memo(({ positions, styles }) => {
 
   const renderExpandedRow = (row) => {
     if (!expandedRows.has(row.ticker)) return null;
-    const colSpan = viewTab === 'estimates' ? 12 : viewTab === 'valuation' ? 12 : viewTab === 'profitability' ? 12 : 12;
+    const colSpan = 12;
+    const timeSeries = buildTimeSeries(row);
+
+    // Enhanced styling for better visibility
+    const cellStyle = { padding: '8px 10px', fontSize: '11px', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.08)' };
+    const headerCellStyle = { ...cellStyle, fontWeight: '700', color: 'rgba(255,255,255,0.8)', textAlign: 'left', background: 'rgba(0,0,0,0.2)' };
+    const yearCellStyle = (isEst) => ({
+      ...cellStyle,
+      fontWeight: '700',
+      textAlign: 'center',
+      color: isEst ? COLORS.cyan : 'rgba(255,255,255,0.9)',
+      background: isEst ? 'rgba(0,212,255,0.12)' : 'rgba(0,0,0,0.15)',
+    });
+
+    // Render view-specific time series content
+    const renderEstimatesContent = () => (
+      timeSeries.length > 0 && (
+        <div style={{ marginBottom: '16px', background: 'rgba(0,0,0,0.25)', borderRadius: '8px', padding: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize: '12px', fontWeight: '700', color: COLORS.cyan, marginBottom: '10px' }}>
+            📈 Financial Time Series (Historical → Forward Estimates)
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                  <th style={headerCellStyle}>Metric</th>
+                  {timeSeries.map((s, i) => (
+                    <th key={i} style={yearCellStyle(s.isEstimate)}>{s.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {/* Revenue with YoY growth */}
+                <tr>
+                  <td style={headerCellStyle}>Revenue</td>
+                  {timeSeries.map((s, i) => {
+                    const g = calcYoYGrowth(timeSeries, i, 'revenue');
+                    return (
+                      <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                        <div>{formatNumber(s.revenue)}</div>
+                        {i > 0 && g != null && (
+                          <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: getGrowthColor(g), marginTop: '2px' }}>
+                            {g > 0 ? '+' : ''}{(g * 100).toFixed(1)}%
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+
+                {/* EBITDA with margin */}
+                <tr>
+                  <td style={headerCellStyle}>EBITDA</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <div>{s.ebitda ? formatNumber(s.ebitda) : '—'}</div>
+                      {s.ebitdaMargin != null && (
+                        <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: getMarginColor(s.ebitdaMargin, { good: 0.25, ok: 0.15 }), marginTop: '2px' }}>
+                          {(s.ebitdaMargin * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+
+                {/* EBIT with margin */}
+                <tr>
+                  <td style={headerCellStyle}>EBIT</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <div>{s.operatingIncome ? formatNumber(s.operatingIncome) : '—'}</div>
+                      {s.ebitMargin != null && (
+                        <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: getMarginColor(s.ebitMargin), marginTop: '2px' }}>
+                          {(s.ebitMargin * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+
+                {/* Net Income with margin */}
+                <tr>
+                  <td style={headerCellStyle}>Net Income</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <div>{s.netIncome ? formatNumber(s.netIncome) : '—'}</div>
+                      {s.netMargin != null && (
+                        <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: getMarginColor(s.netMargin, { good: 0.15, ok: 0.05 }), marginTop: '2px' }}>
+                          {(s.netMargin * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+
+                {/* EPS with YoY growth */}
+                <tr>
+                  <td style={headerCellStyle}>EPS</td>
+                  {timeSeries.map((s, i) => {
+                    const g = calcYoYGrowth(timeSeries, i, 'eps');
+                    return (
+                      <td key={i} style={{ ...cellStyle, fontWeight: '500', background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                        <div>{s.eps != null ? `$${s.eps.toFixed(2)}` : '—'}</div>
+                        {i > 0 && g != null && (
+                          <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: getGrowthColor(g), marginTop: '2px' }}>
+                            {g > 0 ? '+' : ''}{(g * 100).toFixed(1)}%
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+
+                {/* CapEx with CapEx % of Revenue */}
+                <tr>
+                  <td style={headerCellStyle}>CapEx</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <div>{s.capitalExpenditure ? formatNumber(Math.abs(s.capitalExpenditure)) : (s.isEstimate ? <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '8px' }}>N/A</span> : '—')}</div>
+                      {s.capexRatio != null && (
+                        <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: 'rgba(255,255,255,0.5)', marginTop: '2px' }}>
+                          {(s.capexRatio * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+
+                {/* FCF with FCF margin */}
+                <tr>
+                  <td style={headerCellStyle}>FCF</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <div>{s.freeCashFlow ? formatNumber(s.freeCashFlow) : (s.isEstimate ? <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '8px' }}>N/A</span> : '—')}</div>
+                      {s.fcfMargin != null && (
+                        <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: getMarginColor(s.fcfMargin, { good: 0.15, ok: 0.08 }), marginTop: '2px' }}>
+                          {(s.fcfMargin * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )
+    );
+
+    const renderValuationContent = () => {
+      // Build valuation time series using price and forward estimates
+      const price = row.price || 0;
+      const marketCap = row.marketCap || 0;
+      const ev = row.enterpriseValue || 0;
+
+      return (
+        <div style={{ marginBottom: '16px', background: 'rgba(0,0,0,0.25)', borderRadius: '8px', padding: '14px', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize: '13px', fontWeight: '700', color: COLORS.cyan, marginBottom: '12px' }}>
+            💰 Valuation Multiples (Forward Estimates)
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
+            {/* Forward P/E by FY */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }}>Forward P/E</div>
+              {timeSeries.filter(s => s.isEstimate && s.eps).slice(0, 3).map((s, i) => {
+                const pe = s.eps ? price / s.eps : null;
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
+                    <span style={{ fontSize: '12px', fontWeight: '600', color: getMultColor(pe) }}>
+                      {formatMult(pe)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* EV/EBITDA by FY */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }}>EV/EBITDA</div>
+              {timeSeries.filter(s => s.isEstimate && s.ebitda).slice(0, 3).map((s, i) => {
+                const evEbitda = s.ebitda ? ev / s.ebitda : null;
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
+                    <span style={{ fontSize: '12px', fontWeight: '600', color: getMultColor(evEbitda, { cheap: 10, fair: 15 }) }}>
+                      {formatMult(evEbitda)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* EV/EBIT by FY */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }}>EV/EBIT</div>
+              {timeSeries.filter(s => s.isEstimate && s.operatingIncome).slice(0, 3).map((s, i) => {
+                const evEbit = s.operatingIncome ? ev / s.operatingIncome : null;
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
+                    <span style={{ fontSize: '12px', fontWeight: '600', color: getMultColor(evEbit, { cheap: 12, fair: 20 }) }}>
+                      {formatMult(evEbit)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* P/S by FY */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }}>Price/Sales</div>
+              {timeSeries.filter(s => s.isEstimate && s.revenue).slice(0, 3).map((s, i) => {
+                const ps = s.revenue ? marketCap / s.revenue : null;
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
+                    <span style={{ fontSize: '12px', fontWeight: '600' }}>
+                      {formatMult(ps)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Additional valuation metrics */}
+          <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '12px' }}>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>NTM P/E</div>
+              <div style={{ fontSize: '13px', fontWeight: '700', color: getMultColor(row.multiples?.forwardPE) }}>{formatMult(row.multiples?.forwardPE)}</div>
+            </div>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>P/B</div>
+              <div style={{ fontSize: '13px', fontWeight: '700' }}>{formatMult(row.cashFlow?.priceToBook || row.historical?.pbRatio)}</div>
+            </div>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>P/FCF</div>
+              <div style={{ fontSize: '13px', fontWeight: '700' }}>{formatMult(row.cashFlow?.priceToFCF)}</div>
+            </div>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>Div Yield</div>
+              <div style={{ fontSize: '13px', fontWeight: '700', fontStyle: 'italic', color: row.cashFlow?.dividendYield > 0.02 ? COLORS.green : undefined }}>{formatPct(row.cashFlow?.dividendYield)}</div>
+            </div>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>FCF Yield</div>
+              <div style={{ fontSize: '13px', fontWeight: '700', fontStyle: 'italic', color: row.profitability?.freeCashFlowYield > 0.05 ? COLORS.green : undefined }}>{formatPct(row.profitability?.freeCashFlowYield)}</div>
+            </div>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>EV/Sales</div>
+              <div style={{ fontSize: '13px', fontWeight: '700' }}>{formatMult(row.historical?.evToEbitda)}</div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const renderProfitabilityContent = () => (
+      timeSeries.length > 0 && (
+        <div style={{ marginBottom: '16px', background: 'rgba(0,0,0,0.25)', borderRadius: '8px', padding: '14px', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize: '13px', fontWeight: '700', color: COLORS.cyan, marginBottom: '12px' }}>
+            📈 Profitability & Margins (Historical → Forward)
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                  <th style={headerCellStyle}>Margin</th>
+                  {timeSeries.map((s, i) => (
+                    <th key={i} style={yearCellStyle(s.isEstimate)}>{s.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {/* Gross Margin */}
+                <tr>
+                  <td style={headerCellStyle}>Gross Margin</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <span style={{ fontStyle: 'italic', color: getMarginColor(s.grossMargin, { good: 0.4, ok: 0.2 }) }}>
+                        {s.grossMargin != null ? `${(s.grossMargin * 100).toFixed(1)}%` : '—'}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+
+                {/* EBITDA Margin */}
+                <tr>
+                  <td style={headerCellStyle}>EBITDA Margin</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <span style={{ fontStyle: 'italic', color: getMarginColor(s.ebitdaMargin, { good: 0.25, ok: 0.15 }) }}>
+                        {s.ebitdaMargin != null ? `${(s.ebitdaMargin * 100).toFixed(1)}%` : '—'}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+
+                {/* EBIT/Operating Margin */}
+                <tr>
+                  <td style={headerCellStyle}>Operating Margin</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <span style={{ fontStyle: 'italic', color: getMarginColor(s.ebitMargin) }}>
+                        {s.ebitMargin != null ? `${(s.ebitMargin * 100).toFixed(1)}%` : '—'}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+
+                {/* Net Margin */}
+                <tr>
+                  <td style={headerCellStyle}>Net Margin</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <span style={{ fontStyle: 'italic', color: getMarginColor(s.netMargin, { good: 0.15, ok: 0.05 }) }}>
+                        {s.netMargin != null ? `${(s.netMargin * 100).toFixed(1)}%` : '—'}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Returns metrics */}
+          <div style={{ marginTop: '12px', display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '10px' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>ROE</div>
+              <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getMarginColor(row.profitability?.roe, { good: 0.15, ok: 0.08 }) }}>{formatPct(row.profitability?.roe)}</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>ROA</div>
+              <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getMarginColor(row.profitability?.roa, { good: 0.08, ok: 0.03 }) }}>{formatPct(row.profitability?.roa)}</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>ROIC</div>
+              <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getMarginColor(row.profitability?.roic, { good: 0.12, ok: 0.06 }) }}>{formatPct(row.profitability?.roic)}</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>3Y Avg ROE</div>
+              <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic' }}>{formatPct(row.profitability?.avgROE)}</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>3Y Rev CAGR</div>
+              <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getGrowthColor(row.growth?.revenue) }}>{row.growth?.revenue != null ? formatPct(row.growth.revenue, true) : '—'}</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>3Y EPS CAGR</div>
+              <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getGrowthColor(row.growth?.eps) }}>{row.growth?.eps != null ? formatPct(row.growth.eps, true) : '—'}</div>
+            </div>
+          </div>
+        </div>
+      )
+    );
+
+    const renderHealthContent = () => (
+      <div style={{ marginBottom: '12px' }}>
+        <div style={{ fontSize: '10px', fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>
+          🏥 Financial Health & Liquidity
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+          {/* Scores */}
+          <div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px' }}>Risk Scores</div>
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
+              <div>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Altman Z-Score</div>
+                <div style={{ marginTop: '2px' }}><ZScoreBadge score={row.health?.altmanZScore} /></div>
+                <div style={{ fontSize: '7px', color: 'rgba(255,255,255,0.4)', marginTop: '2px' }}>
+                  {row.health?.altmanZScore > 2.99 ? 'Safe Zone' : row.health?.altmanZScore > 1.81 ? 'Grey Zone' : 'Distress Zone'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Piotroski F-Score</div>
+                <div style={{ marginTop: '2px' }}><PiotroskiBadge score={row.health?.piotroskiScore} /></div>
+                <div style={{ fontSize: '7px', color: 'rgba(255,255,255,0.4)', marginTop: '2px' }}>
+                  {row.health?.piotroskiScore >= 7 ? 'Strong' : row.health?.piotroskiScore >= 4 ? 'Moderate' : 'Weak'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Liquidity Ratios */}
+          <div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px' }}>Liquidity & Solvency</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Current Ratio</div>
+                <div style={{ fontSize: '11px', fontWeight: '600', color: row.health?.currentRatio > 1.5 ? COLORS.green : row.health?.currentRatio > 1 ? COLORS.gold : COLORS.red }}>{formatRatio(row.health?.currentRatio)}</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Quick Ratio</div>
+                <div style={{ fontSize: '11px', fontWeight: '600' }}>{formatRatio(row.health?.quickRatio)}</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>D/E Ratio</div>
+                <div style={{ fontSize: '11px', fontWeight: '600', color: row.health?.debtToEquity > 2 ? COLORS.red : row.health?.debtToEquity > 1 ? COLORS.orange : COLORS.green }}>{formatRatio(row.health?.debtToEquity)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Additional health metrics */}
+        <div style={{ marginTop: '12px', display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '10px' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Int Coverage</div>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: row.health?.interestCoverage > 5 ? COLORS.green : row.health?.interestCoverage > 2 ? COLORS.gold : COLORS.red }}>{formatRatio(row.health?.interestCoverage)}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Payout Ratio</div>
+            <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: row.cashFlow?.payoutRatio > 0.8 ? COLORS.red : undefined }}>{formatPct(row.cashFlow?.payoutRatio)}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>FCF/Share</div>
+            <div style={{ fontSize: '11px', fontWeight: '600' }}>{row.cashFlow?.freeCashFlowPerShare != null ? `$${row.cashFlow.freeCashFlowPerShare.toFixed(2)}` : '—'}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>OpCF/Share</div>
+            <div style={{ fontSize: '11px', fontWeight: '600' }}>{row.cashFlow?.operatingCashFlowPerShare != null ? `$${row.cashFlow.operatingCashFlowPerShare.toFixed(2)}` : '—'}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Asset Turn</div>
+            <div style={{ fontSize: '11px', fontWeight: '600' }}>{formatRatio(row.efficiency?.assetTurnover)}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>Inv Turn</div>
+            <div style={{ fontSize: '11px', fontWeight: '600' }}>{formatRatio(row.efficiency?.inventoryTurnover)}</div>
+          </div>
+        </div>
+      </div>
+    );
 
     return (
       <tr key={`${row.ticker}-exp`}>
-        <td colSpan={colSpan} style={{ padding: '10px 14px', background: 'rgba(0,212,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', fontSize: '10px' }}>
-            {/* FY2 Estimates */}
-            <div>
-              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>{getFyLabel(row.fy2?.fiscalYear)} Est</div>
-              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Rev: {formatNumber(row.fy2?.revenue)}</div>
-              <div style={{ color: 'rgba(255,255,255,0.7)' }}>EPS: ${row.fy2?.eps?.toFixed(2) || '—'}</div>
-              <div style={{ color: 'rgba(255,255,255,0.7)' }}>EBITDA: {formatNumber(row.fy2?.ebitda)}</div>
-            </div>
+        <td colSpan={colSpan} style={{ padding: '12px 14px', background: 'rgba(0,212,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+          {/* View-specific content */}
+          {viewTab === 'estimates' && renderEstimatesContent()}
+          {viewTab === 'valuation' && renderValuationContent()}
+          {viewTab === 'profitability' && renderProfitabilityContent()}
+          {viewTab === 'health' && renderHealthContent()}
+
+          {/* Common Info Row - 5 columns with key data (always show) */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', fontSize: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '12px' }}>
             {/* Price Targets */}
             <div>
               <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Price Targets</div>
@@ -624,21 +1248,29 @@ const ConsensusTab = memo(({ positions, styles }) => {
                 {row.ratings?.strongSell > 0 && <span style={{ color: COLORS.red }}>SS:{row.ratings.strongSell}</span>}
               </div>
             </div>
-            {/* Historical Growth */}
+            {/* Capital Structure */}
             <div>
-              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>3Y Growth Avg</div>
-              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Revenue: <span style={{ color: getGrowthColor(row.growth?.revenue) }}>{formatPct(row.growth?.revenue, true)}</span></div>
-              <div style={{ color: 'rgba(255,255,255,0.7)' }}>EPS: <span style={{ color: getGrowthColor(row.growth?.eps) }}>{formatPct(row.growth?.eps, true)}</span></div>
-              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Net Inc: <span style={{ color: getGrowthColor(row.growth?.netIncome) }}>{formatPct(row.growth?.netIncome, true)}</span></div>
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Capital Structure</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Mkt Cap: {formatNumber(row.marketCap)}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>EV: {formatNumber(row.enterpriseValue)}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Net Debt: {row.balanceSheet?.netDebt != null ? formatNumber(row.balanceSheet.netDebt) : '—'}</div>
             </div>
-            {/* Financial Health */}
+            {/* Cash Flow */}
             <div>
-              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Health Scores</div>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                <span style={{ color: 'rgba(255,255,255,0.5)' }}>Z:</span><ZScoreBadge score={row.health?.altmanZScore} />
-              </div>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px' }}>
-                <span style={{ color: 'rgba(255,255,255,0.5)' }}>P:</span><PiotroskiBadge score={row.health?.piotroskiScore} />
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Cash Flow (TTM)</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>FCF: {row.cashFlow?.freeCashFlow != null ? formatNumber(row.cashFlow.freeCashFlow) : '—'}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>FCF Conv: <span style={{ color: row.cashFlow?.fcfConversion > 1 ? COLORS.green : row.cashFlow?.fcfConversion > 0.7 ? COLORS.gold : COLORS.red, fontStyle: 'italic' }}>{row.cashFlow?.fcfConversion != null ? `${(row.cashFlow.fcfConversion * 100).toFixed(1)}%` : '—'}</span></div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>FY End: {row.fy1?.date ? row.fy1.date.slice(5) : '—'}</div>
+            </div>
+            {/* Earnings */}
+            <div>
+              <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px' }}>Earnings</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>Next: {row.earnings?.nextDate || '—'}</div>
+              <div style={{ color: 'rgba(255,255,255,0.7)' }}>
+                Surprise: <span style={{ color: row.earnings?.avgSurprise > 0 ? COLORS.green : COLORS.red, fontStyle: 'italic' }}>
+                  {row.earnings?.avgSurprise != null ? `${(row.earnings.avgSurprise * 100).toFixed(1)}%` : '—'}
+                </span>
+                {row.earnings?.beatCount != null && <span style={{ fontSize: '8px', marginLeft: '4px' }}>({row.earnings.beatCount}B/{row.earnings.missCount}M)</span>}
               </div>
             </div>
           </div>
@@ -675,27 +1307,6 @@ const ConsensusTab = memo(({ positions, styles }) => {
 
       {error && <div style={{ marginBottom: '12px', padding: '10px', background: 'rgba(231,76,60,0.1)', borderRadius: '6px', color: COLORS.red, fontSize: '11px' }}>⚠️ {error}</div>}
 
-      {/* Summary Stats */}
-      {stats && (
-        <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>ANALYST SENTIMENT</div>
-            <div style={{ fontSize: '16px', fontWeight: '700', color: stats.buyPct > 0.5 ? COLORS.green : COLORS.gold }}>{stats.buyPct != null ? `${(stats.buyPct * 100).toFixed(0)}% Buy` : '—'}</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>AVG UPSIDE</div>
-            <div style={{ fontSize: '16px', fontWeight: '700', color: getUpsideColor(stats.avgUpside) }}>{stats.avgUpside != null ? `${stats.avgUpside > 0 ? '+' : ''}${(stats.avgUpside * 100).toFixed(0)}%` : '—'}</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>AVG Z-SCORE</div>
-            <div style={{ fontSize: '16px', fontWeight: '700', color: getZScoreColor(stats.avgZScore) }}>{stats.avgZScore != null ? stats.avgZScore.toFixed(1) : '—'}</div>
-          </div>
-          <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', marginBottom: '3px' }}>AVG PIOTROSKI</div>
-            <div style={{ fontSize: '16px', fontWeight: '700', color: getPiotroskiColor(stats.avgPiotroski) }}>{stats.avgPiotroski != null ? stats.avgPiotroski.toFixed(1) : '—'}</div>
-          </div>
-        </div>
-      )}
 
       {/* View Tabs */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
@@ -714,9 +1325,16 @@ const ConsensusTab = memo(({ positions, styles }) => {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'rgba(0,0,0,0.2)' }}>{renderTableHead()}</tr></thead>
               <tbody>
-                {sortedData.map(row => (
+                {sortedData.map((row, idx) => (
                   <React.Fragment key={row.ticker}>
-                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer', background: expandedRows.has(row.ticker) ? 'rgba(0,212,255,0.03)' : 'transparent' }}
+                    <tr style={{
+                      borderBottom: '1px solid rgba(255,255,255,0.06)',
+                      cursor: 'pointer',
+                      background: expandedRows.has(row.ticker) ? 'rgba(0,212,255,0.06)' : (idx % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'),
+                      transition: 'background 0.15s ease',
+                    }}
+                      onMouseEnter={(e) => { if (!expandedRows.has(row.ticker)) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                      onMouseLeave={(e) => { if (!expandedRows.has(row.ticker)) e.currentTarget.style.background = idx % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'; }}
                       onClick={() => toggleRow(row.ticker)}>
                       {renderTableRow(row)}
                     </tr>
