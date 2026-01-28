@@ -89,67 +89,13 @@ const formatPercent = (num) => {
   return `${(num * 100).toFixed(1)}%`;
 };
 
-// Known ETF/ETN tickers (common ones that don't have obvious patterns)
-const KNOWN_ETFS = new Set([
-  // Country/Region ETFs
-  'EWY', 'EWZ', 'EWJ', 'EWG', 'EWU', 'EWA', 'EWC', 'EWH', 'EWT', 'EWS',
-  'EWM', 'EWP', 'EWQ', 'EWI', 'EWK', 'EWL', 'EWN', 'EWO', 'EWD', 'EWW',
-  'FXI', 'MCHI', 'INDA', 'VWO', 'EEM', 'IEMG',
-  // Sector ETFs
-  'XLF', 'XLK', 'XLE', 'XLV', 'XLI', 'XLP', 'XLY', 'XLB', 'XLU', 'XLRE',
-  'VGT', 'VHT', 'VFH', 'VDE', 'VIS', 'VAW', 'VCR', 'VDC', 'VPU', 'VNQ',
-  'IGV', 'IYW', 'IYF', 'IYH', 'IYE', 'IYJ', 'IYC', 'IYK', 'IYZ', 'IYR',
-  'KRE', 'KBE', 'KIE', 'KDEF',
-  // Thematic/Industry ETFs
-  'ARKK', 'ARKW', 'ARKF', 'ARKG', 'ARKQ', 'ARKX',
-  'WCLD', 'CLOU', 'SKYY', 'HACK', 'CIBR', 'BOTZ', 'ROBO',
-  'SMH', 'SOXX', 'PSI', 'PSCC', 'PSCE', 'PSCI', 'PSCF', 'PSCH', 'PSCM', 'PSCU',
-  'IBB', 'XBI', 'LABU', 'LABD',
-  'GDX', 'GDXJ', 'SIL', 'SILJ', 'GLD', 'SLV', 'IAU', 'PPLT', 'PALL',
-  'TAN', 'ICLN', 'QCLN', 'PBW',
-  'JETS', 'AWAY', 'CRUZ',
-  // Leveraged/Inverse ETFs
-  'SOXL', 'SOXS', 'TQQQ', 'SQQQ', 'UPRO', 'SPXU', 'UDOW', 'SDOW',
-  'TNA', 'TZA', 'URTY', 'SRTY', 'FAS', 'FAZ', 'NUGT', 'DUST',
-  'GDXU', 'GDXD', 'FNGU', 'FNGD', 'TECL', 'TECS', 'CURE', 'LABU',
-  'SPXL', 'SPXS', 'BULZ', 'BERZ', 'WEBL', 'WEBS',
-  'UVXY', 'SVXY', 'VXX', 'VIXY',
-  // Bond ETFs
-  'TLT', 'TLH', 'IEF', 'IEI', 'SHY', 'BND', 'AGG', 'LQD', 'HYG', 'JNK',
-  'TMF', 'TMV', 'TBT', 'TBF',
-  // Broad Market ETFs
-  'SPY', 'VOO', 'IVV', 'VTI', 'ITOT', 'SCHB',
-  'QQQ', 'QQQM', 'VGT',
-  'IWM', 'IWN', 'IWO', 'IWF', 'IWD', 'IWB', 'IWV',
-  'VB', 'VBK', 'VBR', 'VO', 'VOE', 'VOT', 'VV', 'VTV', 'VUG',
-  'DIA', 'MDY', 'IJH', 'IJR', 'IJS', 'IJT',
-  // Dividend ETFs
-  'VIG', 'VYM', 'SCHD', 'DVY', 'SDY', 'HDV', 'DGRO',
-  // International ETFs
-  'VXUS', 'VEA', 'VEU', 'IEFA', 'EFA', 'VT',
-]);
-
-// Check if a position is an ETF
-const isETF = (position) => {
-  const ticker = position.ticker?.toUpperCase() || '';
-  const type = position.type?.toUpperCase() || '';
-  const name = position.name?.toUpperCase() || '';
-
-  // Check type field
-  if (type === 'ETF' || type === 'ETN' || type === 'FUND') return true;
-
-  // Check known ETF list
-  if (KNOWN_ETFS.has(ticker)) return true;
-
-  // Check ticker patterns
-  if (ticker.includes('ETF') || ticker.includes('ETN')) return true;
-
-  // Check name for ETF indicators
-  if (name.includes('ETF') || name.includes('FUND') || name.includes('TRUST') ||
-      name.includes('ISHARES') || name.includes('SPDR') || name.includes('VANGUARD') ||
-      name.includes('PROSHARES') || name.includes('DIREXION') || name.includes('INVESCO')) return true;
-
-  return false;
+// Check if consensus data has valid analyst estimates (not just price data)
+const hasValidEstimates = (data) => {
+  if (!data) return false;
+  // Check if we have actual forward estimates (not just zeros)
+  const fy1Rev = data.fy1?.revenue || 0;
+  const fy1Eps = data.fy1?.eps || 0;
+  return fy1Rev > 0 || fy1Eps !== 0;
 };
 
 // Format multiple
@@ -206,16 +152,17 @@ const ConsensusTab = memo(({
     }
   }, []);
 
-  // Get unique tickers from positions (exclude ETFs - they don't have analyst estimates)
-  const stockPositions = positions.filter(p => !isETF(p));
+  // Get unique tickers from ALL positions (we'll filter by data availability after fetch)
   const tickers = [...new Set(
-    stockPositions
+    positions
       .map(p => p.ticker?.toUpperCase())
       .filter(t => t && t.length > 0)
   )];
 
-  // Count of excluded ETFs for display
-  const etfCount = positions.filter(p => isETF(p)).length;
+  // Count positions with valid estimates vs those without (ETFs, etc.)
+  const tickersWithData = tickers.filter(t => hasValidEstimates(consensusData[t]));
+  const tickersWithoutData = tickers.filter(t => consensusData[t] && !hasValidEstimates(consensusData[t]));
+  const noDataCount = tickersWithoutData.length;
 
   // Validate and save API key
   const handleSaveApiKey = async () => {
@@ -279,10 +226,10 @@ const ConsensusTab = memo(({
     setIsLoading(false);
   }, [apiKey, tickers]);
 
-  // Sort data
+  // Sort data - only show positions with valid analyst estimates
   const sortedData = [...tickers]
     .map(ticker => consensusData[ticker])
-    .filter(Boolean)
+    .filter(data => hasValidEstimates(data))
     .sort((a, b) => {
       let aVal, bVal;
 
@@ -505,9 +452,9 @@ const ConsensusTab = memo(({
                 fontSize: '12px',
                 color: 'rgba(255,255,255,0.5)',
               }}>
-                {tickers.length} stock{tickers.length !== 1 ? 's' : ''}
-                {etfCount > 0 && <> • {etfCount} ETF{etfCount !== 1 ? 's' : ''} excluded</>}
-                {' '}• {Object.keys(consensusData).length} with data
+                {tickers.length} position{tickers.length !== 1 ? 's' : ''}
+                {' '}• {tickersWithData.length} with estimates
+                {noDataCount > 0 && <> • {noDataCount} without (ETFs/etc)</>}
                 {lastUpdated && (
                   <> • Updated {lastUpdated.toLocaleTimeString()}</>
                 )}
@@ -757,8 +704,8 @@ const ConsensusTab = memo(({
               color: 'rgba(255,255,255,0.5)',
               textAlign: 'center',
             }}>
-              Click "Load Estimates" to fetch forward consensus data for your {tickers.length} stock{tickers.length !== 1 ? 's' : ''}
-              {etfCount > 0 && <><br/><span style={{ fontSize: '11px' }}>({etfCount} ETF{etfCount !== 1 ? 's' : ''} excluded - no analyst estimates)</span></>}
+              Click "Load Estimates" to fetch forward consensus data for your {tickers.length} position{tickers.length !== 1 ? 's' : ''}
+              <br/><span style={{ fontSize: '11px' }}>(ETFs and other non-equity positions will be automatically filtered)</span>
             </p>
           </div>
         </Card>
