@@ -9,8 +9,13 @@
 const BASE_URL = 'https://financialmodelingprep.com/api/v3';
 const STORAGE_KEY = 'monte-carlo-fmp-api-key';
 
-// CORS proxy configuration (same as yahooFinance)
+// CORS proxy configuration - using proxies that allow API keys
 const CORS_PROXIES = [
+  {
+    name: 'allorigins-raw',
+    buildUrl: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    parseResponse: async (response) => response.json(),
+  },
   {
     name: 'allorigins',
     buildUrl: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
@@ -20,8 +25,8 @@ const CORS_PROXIES = [
     },
   },
   {
-    name: 'corsproxy',
-    buildUrl: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    name: 'thingproxy',
+    buildUrl: (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
     parseResponse: async (response) => response.json(),
   },
 ];
@@ -79,7 +84,11 @@ const fetchFMP = async (endpoint, apiKey, timeout = 10000) => {
 
     try {
       const proxyUrl = proxy.buildUrl(url);
-      const response = await fetch(proxyUrl, { signal: controller.signal });
+      const fetchOptions = {
+        signal: controller.signal,
+        headers: proxy.headers || {},
+      };
+      const response = await fetch(proxyUrl, fetchOptions);
       clearTimeout(timeoutId);
 
       if (response.ok) {
