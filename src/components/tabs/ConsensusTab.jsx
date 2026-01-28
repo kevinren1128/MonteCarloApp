@@ -105,6 +105,35 @@ const formatMultiple = (num) => {
   return `${num.toFixed(1)}x`;
 };
 
+// Calculate growth rate between two values
+const calcGrowth = (current, next) => {
+  if (!current || !next || current === 0) return null;
+  return (next - current) / Math.abs(current);
+};
+
+// Format growth with arrow indicator
+const formatGrowth = (growth) => {
+  if (growth === null || growth === undefined || isNaN(growth)) return '—';
+  const pct = (growth * 100).toFixed(1);
+  const arrow = growth > 0 ? '↑' : growth < 0 ? '↓' : '→';
+  return `${arrow}${Math.abs(pct)}%`;
+};
+
+// Get color for growth (green = positive, red = negative)
+const getGrowthColor = (growth) => {
+  if (growth === null || growth === undefined || isNaN(growth)) return 'rgba(255,255,255,0.4)';
+  if (growth > 0.15) return COLORS.green;
+  if (growth > 0) return '#7dcea0';
+  if (growth > -0.1) return COLORS.orange;
+  return COLORS.red;
+};
+
+// Get fiscal year label (e.g., "FY25" from 2025)
+const getFyLabel = (fiscalYear) => {
+  if (!fiscalYear) return 'FY?';
+  return `FY${String(fiscalYear).slice(-2)}`;
+};
+
 // Color for margin (green = good, red = poor)
 const getMarginColor = (margin, thresholds = { good: 0.2, ok: 0.1 }) => {
   if (margin === null || margin === undefined || isNaN(margin)) return 'rgba(255,255,255,0.4)';
@@ -550,9 +579,9 @@ const ConsensusTab = memo(({
                     onClick={() => handleSort('fy1Revenue')}
                     style={{ ...thStyle, textAlign: 'right' }}
                   >
-                    FY1 Rev<SortIndicator column="fy1Revenue" />
+                    Revenue<SortIndicator column="fy1Revenue" />
                   </th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>FY2 Rev</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Rev Grth</th>
                   <th
                     onClick={() => handleSort('grossMargin')}
                     style={{ ...thStyle, textAlign: 'right' }}
@@ -570,9 +599,9 @@ const ConsensusTab = memo(({
                     onClick={() => handleSort('fy1Eps')}
                     style={{ ...thStyle, textAlign: 'right' }}
                   >
-                    FY1 EPS<SortIndicator column="fy1Eps" />
+                    EPS<SortIndicator column="fy1Eps" />
                   </th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>FY2 EPS</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>EPS Grth</th>
                   <th
                     onClick={() => handleSort('forwardPE')}
                     style={{ ...thStyle, textAlign: 'right' }}
@@ -580,7 +609,6 @@ const ConsensusTab = memo(({
                     Fwd P/E<SortIndicator column="forwardPE" />
                   </th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>EV/EBITDA</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>P/S</th>
                 </tr>
               </thead>
               <tbody>
@@ -616,14 +644,21 @@ const ConsensusTab = memo(({
                       </span>
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
-                      {formatNumber(row.fy1?.revenue)}
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <span>{formatNumber(row.fy1?.revenue)}</span>
+                        <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>
+                          {getFyLabel(row.fy1?.fiscalYear)}
+                        </span>
+                      </div>
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
-                      {formatNumber(row.fy2?.revenue)}
+                      <span style={{ color: getGrowthColor(calcGrowth(row.fy1?.revenue, row.fy2?.revenue)) }}>
+                        {formatGrowth(calcGrowth(row.fy1?.revenue, row.fy2?.revenue))}
+                      </span>
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
-                      <span style={{ color: getMarginColor(row.fy1?.grossMargin, { good: 0.4, ok: 0.2 }) }}>
-                        {formatPercent(row.fy1?.grossMargin)}
+                      <span style={{ color: getMarginColor(row.fy1?.grossMargin || row.historical?.grossMargin, { good: 0.4, ok: 0.2 }) }}>
+                        {formatPercent(row.fy1?.grossMargin || row.historical?.grossMargin)}
                       </span>
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
@@ -637,10 +672,17 @@ const ConsensusTab = memo(({
                       </span>
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
-                      ${row.fy1?.eps?.toFixed(2) || '—'}
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <span>${row.fy1?.eps?.toFixed(2) || '—'}</span>
+                        <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)' }}>
+                          {getFyLabel(row.fy1?.fiscalYear)}
+                        </span>
+                      </div>
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
-                      ${row.fy2?.eps?.toFixed(2) || '—'}
+                      <span style={{ color: getGrowthColor(calcGrowth(row.fy1?.eps, row.fy2?.eps)) }}>
+                        {formatGrowth(calcGrowth(row.fy1?.eps, row.fy2?.eps))}
+                      </span>
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
                       <span style={{ color: getMultipleColor(row.multiples?.forwardPE) }}>

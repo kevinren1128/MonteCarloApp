@@ -94,26 +94,30 @@ const fetchFMP = async (endpoint, apiKey, timeout = 15000) => {
 };
 
 /**
+ * Extract fiscal year from date string (e.g., "2025-12-31" -> 2025)
+ */
+const extractFiscalYear = (dateStr) => {
+  if (!dateStr) return null;
+  const year = parseInt(dateStr.substring(0, 4), 10);
+  return isNaN(year) ? null : year;
+};
+
+/**
  * Fetch analyst estimates for a ticker
  * Returns forward revenue, EPS, EBIT, net income estimates
  */
 export const fetchAnalystEstimates = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/analyst-estimates?symbol=${ticker}&period=annual&limit=2`, apiKey);
+    // Fetch more periods to ensure we get future estimates
+    const data = await fetchFMP(`/analyst-estimates?symbol=${ticker}&period=annual&limit=5`, apiKey);
 
     if (!data || data.length === 0) {
       console.warn('[FMP] No analyst estimates data for', ticker);
       return null;
     }
 
-    // Log FULL first result to see all field names and values
-    console.log('[FMP] ===== ANALYST ESTIMATES FOR', ticker, '=====');
-    console.log('[FMP] Full response:', JSON.stringify(data[0], null, 2));
-
-    // FMP returns estimates sorted by date (most recent first)
-    // FY1 = next fiscal year, FY2 = year after
-    const fy1 = data[0] || {};
-    const fy2 = data[1] || {};
+    // Log response for debugging
+    console.log('[FMP] Analyst estimates for', ticker, '- dates:', data.map(d => d.date));
 
     // Try multiple possible field name variations
     const getRevenue = (obj) =>
@@ -136,25 +140,40 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
       obj.estimatedEbitAvg || obj.ebitAvg || obj.ebit ||
       obj.estimatedEbitLow || obj.estimatedEbitHigh || 0;
 
+    // Sort by date ascending to get proper FY order
+    const sortedData = [...data].sort((a, b) => {
+      const dateA = a.date || '';
+      const dateB = b.date || '';
+      return dateA.localeCompare(dateB);
+    });
+
+    // Get current year to find future estimates
+    const currentYear = new Date().getFullYear();
+
+    // Filter to only future fiscal years
+    const futureEstimates = sortedData.filter(d => {
+      const fy = extractFiscalYear(d.date);
+      return fy && fy >= currentYear;
+    });
+
+    // Use first two future years, or fall back to most recent data
+    const fy1Data = futureEstimates[0] || sortedData[sortedData.length - 2] || {};
+    const fy2Data = futureEstimates[1] || sortedData[sortedData.length - 1] || {};
+
+    const buildFyData = (obj) => ({
+      date: obj.date,
+      fiscalYear: extractFiscalYear(obj.date),
+      revenue: getRevenue(obj),
+      grossProfit: obj.estimatedGrossProfitAvg || obj.grossProfitAvg || null,
+      ebit: getEbit(obj),
+      ebitda: getEbitda(obj),
+      netIncome: getNetIncome(obj),
+      eps: getEps(obj),
+    });
+
     return {
-      fy1: {
-        date: fy1.date,
-        revenue: getRevenue(fy1),
-        grossProfit: fy1.estimatedGrossProfitAvg || fy1.grossProfitAvg || null,
-        ebit: getEbit(fy1),
-        ebitda: getEbitda(fy1),
-        netIncome: getNetIncome(fy1),
-        eps: getEps(fy1),
-      },
-      fy2: {
-        date: fy2.date,
-        revenue: getRevenue(fy2),
-        grossProfit: fy2.estimatedGrossProfitAvg || fy2.grossProfitAvg || null,
-        ebit: getEbit(fy2),
-        ebitda: getEbitda(fy2),
-        netIncome: getNetIncome(fy2),
-        eps: getEps(fy2),
-      },
+      fy1: buildFyData(fy1Data),
+      fy2: buildFyData(fy2Data),
     };
   } catch (err) {
     console.warn(`Failed to fetch analyst estimates for ${ticker}:`, err);
