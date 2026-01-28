@@ -11,8 +11,18 @@
  * Uses CORS proxies since Yahoo doesn't support browser-based requests directly.
  */
 
-// CORS proxy configuration - only proxies that work in browsers
+// CORS proxy configuration - multiple fallbacks for reliability
 const CORS_PROXIES = [
+  {
+    name: 'corsproxy-org',
+    buildUrl: (url) => `https://corsproxy.org/?${encodeURIComponent(url)}`,
+    parseResponse: async (response) => response.json(),
+  },
+  {
+    name: 'thingproxy',
+    buildUrl: (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+    parseResponse: async (response) => response.json(),
+  },
   {
     name: 'allorigins-raw',
     buildUrl: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
@@ -25,11 +35,6 @@ const CORS_PROXIES = [
       const data = await response.json();
       return data.contents ? JSON.parse(data.contents) : null;
     },
-  },
-  {
-    name: 'thingproxy',
-    buildUrl: (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
-    parseResponse: async (response) => response.json(),
   },
 ];
 
