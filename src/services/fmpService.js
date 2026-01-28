@@ -116,8 +116,12 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
       return null;
     }
 
-    // Log response for debugging
-    console.log('[FMP] Analyst estimates for', ticker, '- dates:', data.map(d => d.date));
+    // Log full response for debugging
+    console.log('[FMP] Analyst estimates for', ticker, '- raw data:', data.map(d => ({
+      date: d.date,
+      revenue: d.estimatedRevenueAvg || d.revenueAvg,
+      eps: d.estimatedEpsAvg || d.epsAvg,
+    })));
 
     // Try multiple possible field name variations
     const getRevenue = (obj) =>
@@ -140,25 +144,20 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
       obj.estimatedEbitAvg || obj.ebitAvg || obj.ebit ||
       obj.estimatedEbitLow || obj.estimatedEbitHigh || 0;
 
-    // Sort by date ascending to get proper FY order
+    // Sort by date DESCENDING to get most recent first (FMP typically returns this way)
     const sortedData = [...data].sort((a, b) => {
       const dateA = a.date || '';
       const dateB = b.date || '';
-      return dateA.localeCompare(dateB);
+      return dateB.localeCompare(dateA); // Descending - newest first
     });
 
-    // Get current year to find future estimates
-    const currentYear = new Date().getFullYear();
+    // The first item is the furthest future estimate (FY2)
+    // The second item is the nearer future estimate (FY1)
+    // We want FY1 to be the next fiscal year, FY2 to be the year after
+    const fy2Data = sortedData[0] || {};
+    const fy1Data = sortedData[1] || sortedData[0] || {};
 
-    // Filter to only future fiscal years
-    const futureEstimates = sortedData.filter(d => {
-      const fy = extractFiscalYear(d.date);
-      return fy && fy >= currentYear;
-    });
-
-    // Use first two future years, or fall back to most recent data
-    const fy1Data = futureEstimates[0] || sortedData[sortedData.length - 2] || {};
-    const fy2Data = futureEstimates[1] || sortedData[sortedData.length - 1] || {};
+    console.log('[FMP] Selected for', ticker, '- FY1:', fy1Data.date, 'FY2:', fy2Data.date);
 
     const buildFyData = (obj) => ({
       date: obj.date,
