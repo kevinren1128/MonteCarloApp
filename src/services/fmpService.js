@@ -105,6 +105,10 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
       return null;
     }
 
+    // Log first result to see field names
+    console.log('[FMP] Analyst estimates fields for', ticker, ':', Object.keys(data[0] || {}));
+    console.log('[FMP] Analyst estimates sample:', data[0]);
+
     // FMP returns estimates sorted by date (most recent first)
     // FY1 = next fiscal year, FY2 = year after
     const fy1 = data[0] || {};
@@ -113,21 +117,21 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
     return {
       fy1: {
         date: fy1.date,
-        revenue: fy1.estimatedRevenueAvg,
-        grossProfit: fy1.estimatedGrossProfitAvg || null,
-        ebit: fy1.estimatedEbitAvg,
-        ebitda: fy1.estimatedEbitdaAvg,
-        netIncome: fy1.estimatedNetIncomeAvg,
-        eps: fy1.estimatedEpsAvg,
+        revenue: fy1.estimatedRevenueAvg || fy1.revenueAvg || fy1.revenue,
+        grossProfit: fy1.estimatedGrossProfitAvg || fy1.grossProfitAvg || null,
+        ebit: fy1.estimatedEbitAvg || fy1.ebitAvg || fy1.ebit,
+        ebitda: fy1.estimatedEbitdaAvg || fy1.ebitdaAvg || fy1.ebitda,
+        netIncome: fy1.estimatedNetIncomeAvg || fy1.netIncomeAvg || fy1.netIncome,
+        eps: fy1.estimatedEpsAvg || fy1.epsAvg || fy1.eps,
       },
       fy2: {
         date: fy2.date,
-        revenue: fy2.estimatedRevenueAvg,
-        grossProfit: fy2.estimatedGrossProfitAvg || null,
-        ebit: fy2.estimatedEbitAvg,
-        ebitda: fy2.estimatedEbitdaAvg,
-        netIncome: fy2.estimatedNetIncomeAvg,
-        eps: fy2.estimatedEpsAvg,
+        revenue: fy2.estimatedRevenueAvg || fy2.revenueAvg || fy2.revenue,
+        grossProfit: fy2.estimatedGrossProfitAvg || fy2.grossProfitAvg || null,
+        ebit: fy2.estimatedEbitAvg || fy2.ebitAvg || fy2.ebit,
+        ebitda: fy2.estimatedEbitdaAvg || fy2.ebitdaAvg || fy2.ebitda,
+        netIncome: fy2.estimatedNetIncomeAvg || fy2.netIncomeAvg || fy2.netIncome,
+        eps: fy2.estimatedEpsAvg || fy2.epsAvg || fy2.eps,
       },
     };
   } catch (err) {
@@ -173,11 +177,13 @@ export const fetchEnterpriseValue = async (ticker, apiKey) => {
     }
 
     const ev = data[0];
+    console.log('[FMP] Enterprise value fields for', ticker, ':', Object.keys(ev));
+
     return {
       enterpriseValue: ev.enterpriseValue,
-      marketCap: ev.marketCapitalization,
-      totalDebt: ev.addTotalDebt,
-      cashAndEquivalents: ev.minusCashAndCashEquivalents,
+      marketCap: ev.marketCapitalization || ev.marketCap,
+      totalDebt: ev.addTotalDebt || ev.totalDebt,
+      cashAndEquivalents: ev.minusCashAndCashEquivalents || ev.cashAndCashEquivalents,
     };
   } catch (err) {
     console.warn(`Failed to fetch enterprise value for ${ticker}:`, err);
@@ -197,6 +203,8 @@ export const fetchKeyMetrics = async (ticker, apiKey) => {
     }
 
     const metrics = data[0];
+    console.log('[FMP] Key metrics fields for', ticker, ':', Object.keys(metrics));
+
     return {
       peRatio: metrics.peRatioTTM || metrics.peRatio,
       pbRatio: metrics.pbRatioTTM || metrics.pbRatio,
