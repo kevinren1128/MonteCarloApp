@@ -89,6 +89,69 @@ const formatPercent = (num) => {
   return `${(num * 100).toFixed(1)}%`;
 };
 
+// Known ETF/ETN tickers (common ones that don't have obvious patterns)
+const KNOWN_ETFS = new Set([
+  // Country/Region ETFs
+  'EWY', 'EWZ', 'EWJ', 'EWG', 'EWU', 'EWA', 'EWC', 'EWH', 'EWT', 'EWS',
+  'EWM', 'EWP', 'EWQ', 'EWI', 'EWK', 'EWL', 'EWN', 'EWO', 'EWD', 'EWW',
+  'FXI', 'MCHI', 'INDA', 'VWO', 'EEM', 'IEMG',
+  // Sector ETFs
+  'XLF', 'XLK', 'XLE', 'XLV', 'XLI', 'XLP', 'XLY', 'XLB', 'XLU', 'XLRE',
+  'VGT', 'VHT', 'VFH', 'VDE', 'VIS', 'VAW', 'VCR', 'VDC', 'VPU', 'VNQ',
+  'IGV', 'IYW', 'IYF', 'IYH', 'IYE', 'IYJ', 'IYC', 'IYK', 'IYZ', 'IYR',
+  'KRE', 'KBE', 'KIE', 'KDEF',
+  // Thematic/Industry ETFs
+  'ARKK', 'ARKW', 'ARKF', 'ARKG', 'ARKQ', 'ARKX',
+  'WCLD', 'CLOU', 'SKYY', 'HACK', 'CIBR', 'BOTZ', 'ROBO',
+  'SMH', 'SOXX', 'PSI', 'PSCC', 'PSCE', 'PSCI', 'PSCF', 'PSCH', 'PSCM', 'PSCU',
+  'IBB', 'XBI', 'LABU', 'LABD',
+  'GDX', 'GDXJ', 'SIL', 'SILJ', 'GLD', 'SLV', 'IAU', 'PPLT', 'PALL',
+  'TAN', 'ICLN', 'QCLN', 'PBW',
+  'JETS', 'AWAY', 'CRUZ',
+  // Leveraged/Inverse ETFs
+  'SOXL', 'SOXS', 'TQQQ', 'SQQQ', 'UPRO', 'SPXU', 'UDOW', 'SDOW',
+  'TNA', 'TZA', 'URTY', 'SRTY', 'FAS', 'FAZ', 'NUGT', 'DUST',
+  'GDXU', 'GDXD', 'FNGU', 'FNGD', 'TECL', 'TECS', 'CURE', 'LABU',
+  'SPXL', 'SPXS', 'BULZ', 'BERZ', 'WEBL', 'WEBS',
+  'UVXY', 'SVXY', 'VXX', 'VIXY',
+  // Bond ETFs
+  'TLT', 'TLH', 'IEF', 'IEI', 'SHY', 'BND', 'AGG', 'LQD', 'HYG', 'JNK',
+  'TMF', 'TMV', 'TBT', 'TBF',
+  // Broad Market ETFs
+  'SPY', 'VOO', 'IVV', 'VTI', 'ITOT', 'SCHB',
+  'QQQ', 'QQQM', 'VGT',
+  'IWM', 'IWN', 'IWO', 'IWF', 'IWD', 'IWB', 'IWV',
+  'VB', 'VBK', 'VBR', 'VO', 'VOE', 'VOT', 'VV', 'VTV', 'VUG',
+  'DIA', 'MDY', 'IJH', 'IJR', 'IJS', 'IJT',
+  // Dividend ETFs
+  'VIG', 'VYM', 'SCHD', 'DVY', 'SDY', 'HDV', 'DGRO',
+  // International ETFs
+  'VXUS', 'VEA', 'VEU', 'IEFA', 'EFA', 'VT',
+]);
+
+// Check if a position is an ETF
+const isETF = (position) => {
+  const ticker = position.ticker?.toUpperCase() || '';
+  const type = position.type?.toUpperCase() || '';
+  const name = position.name?.toUpperCase() || '';
+
+  // Check type field
+  if (type === 'ETF' || type === 'ETN' || type === 'FUND') return true;
+
+  // Check known ETF list
+  if (KNOWN_ETFS.has(ticker)) return true;
+
+  // Check ticker patterns
+  if (ticker.includes('ETF') || ticker.includes('ETN')) return true;
+
+  // Check name for ETF indicators
+  if (name.includes('ETF') || name.includes('FUND') || name.includes('TRUST') ||
+      name.includes('ISHARES') || name.includes('SPDR') || name.includes('VANGUARD') ||
+      name.includes('PROSHARES') || name.includes('DIREXION') || name.includes('INVESCO')) return true;
+
+  return false;
+};
+
 // Format multiple
 const formatMultiple = (num) => {
   if (num === null || num === undefined || isNaN(num) || !isFinite(num)) return '—';
@@ -144,15 +207,15 @@ const ConsensusTab = memo(({
   }, []);
 
   // Get unique tickers from positions (exclude ETFs - they don't have analyst estimates)
+  const stockPositions = positions.filter(p => !isETF(p));
   const tickers = [...new Set(
-    positions
-      .filter(p => p.type !== 'ETF' && !p.ticker?.includes('ETF'))
+    stockPositions
       .map(p => p.ticker?.toUpperCase())
       .filter(t => t && t.length > 0)
   )];
 
   // Count of excluded ETFs for display
-  const etfCount = positions.filter(p => p.type === 'ETF' || p.ticker?.includes('ETF')).length;
+  const etfCount = positions.filter(p => isETF(p)).length;
 
   // Validate and save API key
   const handleSaveApiKey = async () => {
