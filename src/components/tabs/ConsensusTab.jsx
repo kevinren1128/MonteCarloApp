@@ -178,11 +178,22 @@ const ConsensusTab = memo(({
 
   // Fetch consensus data for all positions
   const handleFetchData = useCallback(async () => {
-    if (!apiKey || tickers.length === 0) return;
+    console.log('[ConsensusTab] handleFetchData called', { apiKey: apiKey ? 'SET' : 'MISSING', tickers });
+
+    if (!apiKey) {
+      setError('API key is missing. Please enter your FMP API key.');
+      return;
+    }
+    if (tickers.length === 0) {
+      setError('No positions to fetch data for.');
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
     setLoadingProgress({ current: 0, total: tickers.length });
+
+    console.log('[ConsensusTab] Starting fetch for', tickers.length, 'tickers');
 
     try {
       const data = await batchFetchConsensusData(
@@ -190,10 +201,12 @@ const ConsensusTab = memo(({
         apiKey,
         (current, total) => setLoadingProgress({ current, total })
       );
+      console.log('[ConsensusTab] Fetch complete, received data for', Object.keys(data).length, 'tickers');
       setConsensusData(data);
       setLastUpdated(new Date());
     } catch (err) {
-      setError(err.message);
+      console.error('[ConsensusTab] Fetch error:', err);
+      setError(err.message || 'Failed to fetch data');
     }
 
     setIsLoading(false);

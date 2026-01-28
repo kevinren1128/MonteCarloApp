@@ -52,9 +52,12 @@ export const clearApiKey = () => {
 const fetchFMP = async (endpoint, apiKey) => {
   const url = `${BASE_URL}${endpoint}${endpoint.includes('?') ? '&' : '?'}apikey=${apiKey}`;
 
+  console.log('[FMP] Fetching:', endpoint);
+
   const response = await fetch(url);
 
   if (!response.ok) {
+    console.error('[FMP] Error response:', response.status, response.statusText);
     if (response.status === 401) {
       throw new Error('Invalid API key');
     }
@@ -64,7 +67,9 @@ const fetchFMP = async (endpoint, apiKey) => {
     throw new Error(`API error: ${response.status}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  console.log('[FMP] Response for', endpoint, ':', Array.isArray(data) ? `${data.length} items` : 'object');
+  return data;
 };
 
 /**
