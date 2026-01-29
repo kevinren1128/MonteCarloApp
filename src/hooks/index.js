@@ -22,13 +22,12 @@ export { default as useUndoRedo } from './useUndoRedo';
 // Chart interaction hook
 export { default as useChartInteraction } from './useChartInteraction';
 
-// TODO: Extract from App.jsx and add:
-// export { default as usePortfolio } from './usePortfolio';
-// export { default as useMarketData } from './useMarketData';
-// export { default as useCorrelation } from './useCorrelation';
-// export { default as useSimulation } from './useSimulation';
-// export { default as useFactorAnalysis } from './useFactorAnalysis';
-// export { default as useOptimization } from './useOptimization';
+// Business logic hooks (Phase 2.3)
+export { useMarketData } from './useMarketData';
+export { useCorrelation } from './useCorrelation';
+export { useFactorAnalysis } from './useFactorAnalysis';
+export { useSimulation } from './useSimulation';
+export { useOptimization } from './useOptimization';
 
 /**
  * HOOK EXTRACTION GUIDE

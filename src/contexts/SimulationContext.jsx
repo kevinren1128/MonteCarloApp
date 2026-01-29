@@ -38,7 +38,7 @@ import React, { createContext, useContext, useState, useMemo, useCallback } from
  * @property {Function} clearResults - Clear all results
  */
 
-const SimulationContext = createContext(null);
+export const SimulationContext = createContext(null);
 
 /**
  * SimulationContext Provider component

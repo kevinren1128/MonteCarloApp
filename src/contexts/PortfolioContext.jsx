@@ -30,7 +30,7 @@ import React, { createContext, useContext, useState, useMemo, useCallback } from
  * @property {boolean} canRedo - Whether redo is available
  */
 
-const PortfolioContext = createContext(null);
+export const PortfolioContext = createContext(null);
 
 /**
  * PortfolioContext Provider component

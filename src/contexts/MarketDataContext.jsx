@@ -37,7 +37,7 @@ import React, { createContext, useContext, useState, useMemo, useCallback } from
  * @property {Function} clearMarketData - Clear all market data
  */
 
-const MarketDataContext = createContext(null);
+export const MarketDataContext = createContext(null);
 
 /**
  * MarketDataContext Provider component

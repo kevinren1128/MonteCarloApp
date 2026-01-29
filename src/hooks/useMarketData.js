@@ -1,0 +1,599 @@
+import { useCallback, useContext } from 'react';
+import { MarketDataContext } from '../contexts/MarketDataContext';
+import { PortfolioContext } from '../contexts/PortfolioContext';
+import { toast } from '../components/common';
+
+// Services
+import { fetchYahooQuote } from '../services/yahooFinance';
+
+// Utils
+import { 
+  ALL_FACTOR_ETFS,
+  THEMATIC_ETFS,
+} from '../utils/factorDefinitions';
+import {
+  processTickerData,
+  rehydrateTickerData,
+  prepareForStorage,
+  computeDailyReturns,
+} from '../utils/marketDataHelpers';
+
+// Cache keys
+const UNIFIED_CACHE_KEY = 'mc-unified-market-data';
+const UNIFIED_CACHE_MAX_AGE = 24 * 3600 * 1000; // 24 hours
+
+/**
+ * useMarketData - Custom hook for fetching and managing market data
+ * 
+ * Extracts the unified market data fetching logic from App.jsx
+ * Provides a single source of truth for all market data operations
+ */
+export function useMarketData() {
+  const {
+    unifiedMarketData,
+    setUnifiedMarketData,
+    isFetchingUnified,
+    setIsFetchingUnified,
+    unifiedFetchProgress,
+    setUnifiedFetchProgress,
+    fetchErrors,
+    setFetchErrors,
+    positionBetas,
+    setPositionBetas,
+    positionMetadata,
+    setPositionMetadata,
+    calendarYearReturns,
+    setCalendarYearReturns,
+  } = useContext(MarketDataContext);
+  
+  const { positions } = useContext(PortfolioContext);
+
+  // Yahoo Finance API functions using allorigins proxy
+  const fetchYahooData = async (url) => {
+    // Try with allorigins proxy (most reliable for Yahoo)
+    try {
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const response = await fetch(proxyUrl);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.contents) {
+          return JSON.parse(data.contents);
+        }
+      }
+    } catch (e) {
+      console.warn('allorigins proxy failed:', e.message);
+    }
+    
+    // Fallback: try corsproxy.io
+    try {
+      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+      const response = await fetch(proxyUrl);
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e) {
+      console.warn('corsproxy.io failed:', e.message);
+    }
+    
+    // Last resort: try direct (works if CORS is disabled or same-origin)
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e) {
+      console.warn('Direct fetch failed:', e.message);
+    }
+    
+    return null;
+  };
+
+  // Fetch currency exchange rate from Yahoo Finance
+  const fetchExchangeRate = async (fromCurrency, toCurrency = 'USD') => {
+    if (fromCurrency === toCurrency) return 1;
+    
+    try {
+      const symbol = `${fromCurrency}${toCurrency}=X`;
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
+      const data = await fetchYahooData(url);
+      
+      if (data?.chart?.result?.[0]) {
+        const meta = data.chart.result[0].meta;
+        const rate = meta?.regularMarketPrice || meta?.previousClose;
+        if (rate) return rate;
+      }
+      
+      // Fallback: try reverse pair
+      const reverseSymbol = `${toCurrency}${fromCurrency}=X`;
+      const reverseUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${reverseSymbol}?interval=1d&range=1d`;
+      const reverseData = await fetchYahooData(reverseUrl);
+      
+      if (reverseData?.chart?.result?.[0]) {
+        const meta = reverseData.chart.result[0].meta;
+        const rate = meta?.regularMarketPrice || meta?.previousClose;
+        if (rate) return 1 / rate;
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn(`Failed to fetch exchange rate ${fromCurrency}/${toCurrency}:`, error);
+      return null;
+    }
+  };
+
+  // Fetch detailed profile including sector/industry
+  const fetchYahooProfile = async (symbol) => {
+    try {
+      const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=assetProfile,summaryProfile,quoteType,summaryDetail`;
+      const data = await fetchYahooData(url);
+      
+      if (data?.quoteSummary?.result?.[0]) {
+        const result = data.quoteSummary.result[0];
+        const profile = result.assetProfile || result.summaryProfile || {};
+        const quoteType = result.quoteType || {};
+        
+        return {
+          sector: profile.sector || null,
+          industry: profile.industry || null,
+          longName: quoteType.longName || profile.longBusinessSummary?.slice(0, 100) || null,
+          quoteType: quoteType.quoteType || 'EQUITY',
+          shortName: quoteType.shortName || symbol,
+        };
+      }
+      return null;
+    } catch (error) {
+      console.warn(`Failed to fetch profile for ${symbol}:`, error);
+      return null;
+    }
+  };
+
+  const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') => {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`;
+      const data = await fetchYahooData(url);
+      
+      if (data?.chart?.result?.[0]) {
+        const result = data.chart.result[0];
+        const meta = result.meta;
+        const timestamps = result.timestamp || [];
+        const closes = result.indicators?.adjclose?.[0]?.adjclose || 
+                       result.indicators?.quote?.[0]?.close || [];
+        
+        const prices = [];
+        for (let i = 0; i < timestamps.length; i++) {
+          if (closes[i] != null) {
+            prices.push({
+              date: new Date(timestamps[i] * 1000),
+              close: closes[i],
+            });
+          }
+        }
+        
+        return {
+          prices,
+          currency: meta?.currency || 'USD',
+          regularMarketPrice: meta?.regularMarketPrice,
+          previousClose: meta?.previousClose,
+        };
+      }
+      return null;
+    } catch (error) {
+      console.warn(`Failed to fetch history for ${symbol}:`, error);
+      return null;
+    }
+  };
+
+  /**
+   * MAIN UNIFIED FETCH - fetches everything in parallel
+   * This is the core data loading function extracted from App.jsx
+   */
+  const fetchMarketData = useCallback(async (forceRefresh = false) => {
+    const startTime = performance.now();
+    setIsFetchingUnified(true);
+    setFetchErrors([]);
+    
+    // Get all unique tickers
+    const tickers = [...new Set(
+      positions.map(p => p.ticker?.toUpperCase()).filter(Boolean)
+    )];
+    
+    if (tickers.length === 0) {
+      setIsFetchingUnified(false);
+      return;
+    }
+    
+    // Add SPY if not already in positions (needed for beta calculation)
+    // Also add factor ETFs for factor analysis
+    const factorETFs = ['SPY', 'IWM', 'IWD', 'IWF', 'MTUM', 'QUAL', 'SPLV', ...Object.keys(THEMATIC_ETFS)];
+    const allTickers = [...new Set([...factorETFs, ...tickers])];
+    setUnifiedFetchProgress({ current: 0, total: allTickers.length, message: 'Initializing...' });
+    
+    console.log(`🚀 Fetching unified data for ${allTickers.length} tickers (${tickers.length} positions + ${factorETFs.length} factor ETFs)...`);
+    
+    const newData = { ...unifiedMarketData };
+    const errors = [];
+    
+    // Separate cached vs need-to-fetch
+    const needsFetch = [];
+    const cachedTickers = [];
+    const historyResults = {};
+    
+    for (const ticker of allTickers) {
+      const cached = newData[ticker];
+      if (!forceRefresh && cached?.fetchedAt && Date.now() - cached.fetchedAt < UNIFIED_CACHE_MAX_AGE) {
+        cachedTickers.push(ticker);
+        historyResults[ticker] = { ticker, data: cached.closePrices, cached: true };
+      } else {
+        needsFetch.push(ticker);
+      }
+    }
+    
+    let completedCount = cachedTickers.length;
+    console.log(`📦 ${cachedTickers.length} tickers from cache, ${needsFetch.length} to fetch`);
+    
+    setUnifiedFetchProgress({ 
+      current: completedCount, 
+      total: allTickers.length, 
+      message: `${cachedTickers.length} cached, fetching ${needsFetch.length}...` 
+    });
+    
+    // Start profile fetches (don't await yet)
+    const tickersNeedingProfiles = allTickers
+      .filter(t => !newData[t]?.name || forceRefresh)
+      .filter(t => !t.includes('.')); // Skip exchange-suffixed tickers
+    
+    const profilePromise = Promise.all(
+      tickersNeedingProfiles.map(async (ticker) => {
+        try {
+          const profile = await fetchYahooProfile(ticker);
+          return { ticker, profile };
+        } catch (err) {
+          return { ticker, profile: null };
+        }
+      })
+    );
+    
+    // Fetch history with concurrency limiting
+    const CONCURRENCY_LIMIT = 6;
+    const historyFetchResults = [];
+    const fetchQueue = [...needsFetch];
+
+    const fetchWorker = async () => {
+      while (fetchQueue.length > 0) {
+        const ticker = fetchQueue.shift();
+        if (!ticker) continue;
+
+        try {
+          const historyResult = await fetchYahooHistory(ticker, '5y', '1d');
+          completedCount++;
+          const daysCount = historyResult?.prices?.length || 0;
+          setUnifiedFetchProgress({
+            current: completedCount,
+            total: allTickers.length,
+            message: ticker,
+            detail: `${daysCount} days`
+          });
+          historyFetchResults.push({
+            ticker,
+            data: historyResult?.prices || null,
+            currency: historyResult?.currency || 'USD',
+            regularMarketPrice: historyResult?.regularMarketPrice,
+            cached: false
+          });
+        } catch (err) {
+          completedCount++;
+          setUnifiedFetchProgress({
+            current: completedCount,
+            total: allTickers.length,
+            message: ticker,
+            detail: 'failed'
+          });
+          historyFetchResults.push({ ticker, data: null, error: err.message });
+        }
+      }
+    };
+
+    // Create worker pool with concurrency limit
+    const workers = Array(Math.min(CONCURRENCY_LIMIT, needsFetch.length))
+      .fill(null)
+      .map(() => fetchWorker());
+
+    await Promise.all(workers);
+    historyFetchResults.forEach(r => {
+      historyResults[r.ticker] = r;
+      if (r.error) errors.push(`${r.ticker}: ${r.error}`);
+    });
+    
+    console.log(`📊 History fetch complete in ${(performance.now() - startTime).toFixed(0)}ms`);
+    
+    // Fetch exchange rates for non-USD currencies
+    const uniqueCurrencies = [...new Set(
+      historyFetchResults
+        .filter(r => r.currency && r.currency !== 'USD')
+        .map(r => r.currency)
+    )];
+    
+    const exchangeRates = { USD: 1 };
+    if (uniqueCurrencies.length > 0) {
+      console.log(`💱 Fetching exchange rates in parallel for: ${uniqueCurrencies.join(', ')}`);
+
+      const ratePromises = uniqueCurrencies.map(async (currency) => {
+        const rate = await fetchExchangeRate(currency, 'USD');
+        return { currency, rate };
+      });
+
+      const rateResults = await Promise.all(ratePromises);
+
+      rateResults.forEach(({ currency, rate }) => {
+        if (rate) {
+          exchangeRates[currency] = rate;
+          console.log(`   ${currency}/USD = ${rate.toFixed(4)}`);
+        } else {
+          console.warn(`   ${currency}/USD rate not found, using 1`);
+          exchangeRates[currency] = 1;
+        }
+      });
+    }
+    
+    // Await profiles
+    setUnifiedFetchProgress({ 
+      current: allTickers.length, 
+      total: allTickers.length, 
+      message: 'Processing profiles...' 
+    });
+    
+    const profileResults = await profilePromise;
+    const profiles = {};
+    profileResults.forEach(r => {
+      profiles[r.ticker] = r.profile;
+    });
+    
+    console.log(`📋 Profile fetch complete in ${(performance.now() - startTime).toFixed(0)}ms`);
+    
+    // Process all data
+    setUnifiedFetchProgress({ 
+      current: allTickers.length, 
+      total: allTickers.length, 
+      message: 'Calculating betas & correlations...' 
+    });
+    
+    // Get SPY data for beta calculation
+    const spyHistory = historyResults['SPY']?.data;
+    const spyReturns = spyHistory ? computeDailyReturns(spyHistory) : [];
+    const spyTimestamps = spyHistory ? spyHistory.slice(1).map(h => h.date?.getTime?.() || h.date) : [];
+    const spyData = { returns: spyReturns, timestamps: spyTimestamps };
+    
+    console.log('📅 Data date ranges:');
+    
+    // Process each ticker with progress updates
+    let processedCount = 0;
+    const totalToProcess = allTickers.length;
+    
+    for (const ticker of allTickers) {
+      const histResult = historyResults[ticker];
+      
+      // Use cached data if history fetch was cached
+      if (histResult?.cached && newData[ticker]) {
+        processedCount++;
+        continue;
+      }
+      
+      const history = histResult?.data;
+      const profile = profiles[ticker] || newData[ticker] || {};
+      const currency = histResult?.currency || 'USD';
+      const exchangeRate = exchangeRates[currency] || 1;
+      
+      if (history && history.length > 10) {
+        const startDate = history[0]?.date?.toLocaleDateString() || 'N/A';
+        const endDate = history[history.length - 1]?.date?.toLocaleDateString() || 'N/A';
+        const years = (history.length / 252).toFixed(1);
+        const currencyNote = currency !== 'USD' ? ` [${currency}→USD @${exchangeRate.toFixed(4)}]` : '';
+        console.log(`   ${ticker}: ${history.length} days (~${years}yr) from ${startDate} to ${endDate}${currencyNote}`);
+        
+        const processed = processTickerData(ticker, history, profile, spyData, currency, exchangeRate);
+        newData[ticker] = processed;
+      } else if (!newData[ticker]) {
+        newData[ticker] = { ticker, error: 'No data available' };
+        errors.push(`${ticker}: No historical data available`);
+      }
+      
+      processedCount++;
+      // Update progress during processing
+      if (processedCount % 2 === 0 || processedCount === totalToProcess) {
+        setUnifiedFetchProgress({ 
+          current: allTickers.length, 
+          total: allTickers.length, 
+          message: `Processing ${ticker}... (${processedCount}/${totalToProcess})` 
+        });
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    
+    // Update all state from unified data
+    const betas = {};
+    const metadata = {};
+    const yearReturns = {};
+    
+    Object.entries(newData).forEach(([ticker, d]) => {
+      if (d.beta != null) {
+        betas[ticker] = {
+          beta: d.beta,
+          correlation: d.correlation,
+          volatility: d.volatility,
+          ytdReturn: d.ytdReturn,
+          oneYearReturn: d.oneYearReturn,
+          sparklineData: d.sparkline,
+          betaLag: d.betaLag,
+          isInternational: d.isInternational,
+        };
+      }
+      if (d.name || d.sector) {
+        metadata[ticker] = {
+          name: d.name,
+          sector: d.sector,
+          industry: d.industry,
+          type: d.type,
+          currency: d.currency,
+          exchangeRate: d.exchangeRate,
+          domesticPrice: d.domesticPrice,
+        };
+      }
+      if (d.calendarYearReturns) {
+        yearReturns[ticker] = d.calendarYearReturns;
+      }
+    });
+    
+    // Compute factor spreads
+    setUnifiedFetchProgress({ 
+      current: allTickers.length, 
+      total: allTickers.length, 
+      message: 'Computing factor spreads...' 
+    });
+    
+    const spy = newData['SPY']?.dailyReturns || [];
+    if (spy.length > 50) {
+      const spyTs = newData['SPY']?.timestamps?.slice(1) || [];
+      
+      // SMB, HML, MOM, QUAL_FACTOR, LVOL
+      const iwm = newData['IWM']?.dailyReturns || [];
+      const iwd = newData['IWD']?.dailyReturns || [];
+      const iwf = newData['IWF']?.dailyReturns || [];
+      
+      if (iwm.length === spy.length && iwm.length > 0) {
+        const smbReturns = spy.map((s, i) => (iwm[i] || 0) - s);
+        // Store as if it's a regular ticker for factor analysis
+        newData['SMB'] = {
+          ticker: 'SMB',
+          dailyReturns: smbReturns,
+          timestamps: spyTs,
+          oneYearReturn: (newData['IWM']?.oneYearReturn || 0) - (newData['SPY']?.oneYearReturn || 0),
+          name: 'Size (Small-Big)',
+        };
+      }
+      
+      if (iwd.length === iwf.length && iwd.length > 0) {
+        const hmlReturns = iwd.map((v, i) => v - (iwf[i] || 0));
+        newData['HML'] = {
+          ticker: 'HML',
+          dailyReturns: hmlReturns,
+          timestamps: spyTs,
+          oneYearReturn: (newData['IWD']?.oneYearReturn || 0) - (newData['IWF']?.oneYearReturn || 0),
+          name: 'Value (High-Low)',
+        };
+      }
+      
+      console.log(`📊 Computed ${Object.keys(newData).length} factor/ETF series`);
+    }
+    
+    // Update all state
+    setUnifiedFetchProgress({ 
+      current: allTickers.length, 
+      total: allTickers.length, 
+      message: 'Updating state...' 
+    });
+    
+    setUnifiedMarketData(newData);
+    setPositionBetas(betas);
+    setPositionMetadata(prev => ({ ...prev, ...metadata }));
+    setCalendarYearReturns(prev => ({ ...prev, ...yearReturns }));
+    
+    if (errors.length > 0) {
+      setFetchErrors(errors);
+    }
+    
+    // Cache to localStorage
+    setUnifiedFetchProgress({ 
+      current: allTickers.length, 
+      total: allTickers.length, 
+      message: 'Saving to cache...' 
+    });
+    
+    try {
+      const slimData = {};
+      for (const [ticker, data] of Object.entries(newData)) {
+        slimData[ticker] = prepareForStorage(data);
+      }
+      
+      const cachePayload = JSON.stringify({
+        data: slimData,
+        timestamp: Date.now(),
+      });
+      
+      console.log(`💾 Cache size: ${(cachePayload.length / 1024).toFixed(1)}KB for ${Object.keys(slimData).length} tickers`);
+      localStorage.setItem(UNIFIED_CACHE_KEY, cachePayload);
+    } catch (e) {
+      console.warn('Failed to cache unified data:', e);
+    }
+    
+    const elapsed = performance.now() - startTime;
+    console.log(`✅ Unified fetch complete: ${Object.keys(newData).length} tickers in ${elapsed.toFixed(0)}ms`);
+    
+    setUnifiedFetchProgress({ 
+      current: allTickers.length, 
+      total: allTickers.length, 
+      message: `✓ Complete! ${Object.keys(newData).length} tickers loaded in ${(elapsed/1000).toFixed(1)}s` 
+    });
+    await new Promise(r => setTimeout(r, 800));
+    
+    setUnifiedFetchProgress({ current: 0, total: 0, message: '' });
+    setIsFetchingUnified(false);
+    
+    toast.success(`${Object.keys(newData).length} tickers loaded in ${(elapsed/1000).toFixed(1)}s`, {
+      duration: 3000,
+    });
+    
+    return newData;
+  }, [positions, unifiedMarketData, setIsFetchingUnified, setFetchErrors, setUnifiedFetchProgress, 
+      setUnifiedMarketData, setPositionBetas, setPositionMetadata, setCalendarYearReturns]);
+
+  /**
+   * Refresh prices from unified data (lightweight update)
+   */
+  const refreshPrices = useCallback((dataSource = null) => {
+    const marketData = dataSource || unifiedMarketData;
+    let updatedCount = 0;
+    
+    // This would update positions - but positions are in PortfolioContext
+    // So we return the price data for the caller to apply
+    const priceUpdates = {};
+    
+    positions.forEach(pos => {
+      if (!pos.ticker) return;
+      const data = marketData[pos.ticker.toUpperCase()];
+      if (data?.currentPrice) {
+        priceUpdates[pos.id] = {
+          price: data.currentPrice,
+          currency: data.currency || 'USD',
+          domesticPrice: data.domesticPrice || data.currentPrice,
+        };
+        updatedCount++;
+      }
+    });
+    
+    return { priceUpdates, updatedCount };
+  }, [positions, unifiedMarketData]);
+
+  return {
+    // Data
+    unifiedMarketData,
+    positionBetas,
+    positionMetadata,
+    calendarYearReturns,
+    
+    // Loading state
+    isLoading: isFetchingUnified,
+    progress: unifiedFetchProgress,
+    errors: fetchErrors,
+    
+    // Actions
+    fetchMarketData,
+    refreshPrices,
+    
+    // Utilities (expose for other hooks)
+    fetchYahooQuote,
+    fetchYahooData,
+    fetchYahooProfile,
+    fetchYahooHistory,
+    fetchExchangeRate,
+  };
+}
