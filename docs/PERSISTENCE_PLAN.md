@@ -119,12 +119,14 @@ GET /api/fx?pairs=EURUSD,GBPUSD
 - [x] Handle offline mode gracefully
 - [ ] Test cross-device sync (manual test needed)
 
-### 🔲 Phase 6: Vercel Deployment (NOT STARTED)
-- [ ] Connect GitHub repo to Vercel
-- [ ] Add environment variables to Vercel dashboard
-- [ ] Update Google OAuth redirect URLs for production domain
-- [ ] Update Supabase redirect URLs
-- [ ] Test production deployment
+### ✅ Phase 6: Vercel Deployment (COMPLETE)
+- [x] Connect GitHub repo to Vercel
+- [x] Add environment variables to Vercel dashboard
+- [x] Update Google OAuth redirect URLs for production domain
+- [x] Update Supabase redirect URLs
+- [x] Test production deployment
+
+**Production URL:** https://monte-carlo-app-ivory.vercel.app/
 
 ---
 
@@ -163,9 +165,9 @@ wrangler.toml            ✅ Cloudflare config (needs namespace ID)
 ## Next Steps (in order)
 
 1. ~~**Wire up data sync**~~ ✅ COMPLETE - Data syncs automatically on login and on change
-2. **Set up Cloudflare Worker** - Deploy for shared market data cache
+2. ~~**Set up Cloudflare Worker**~~ ✅ COMPLETE - Deployed at monte-carlo-cache.kevinren1128.workers.dev
 3. ~~**Extend portfolioService**~~ ✅ COMPLETE - All data types now supported
-4. **Deploy to Vercel** - Production deployment with real URLs
+4. ~~**Deploy to Vercel**~~ ✅ COMPLETE - Live at monte-carlo-app-ivory.vercel.app
 5. **Test cross-device sync** - Verify data loads correctly on different devices
 
 ---
@@ -195,8 +197,11 @@ supabase db push
 |---------|-----------|
 | Supabase | https://supabase.com/dashboard/project/uoyvihrdllwslljminid |
 | Google Cloud | https://console.cloud.google.com/ |
-| Cloudflare | https://dash.cloudflare.com/ (not set up yet) |
-| Vercel | (not connected yet) |
+| Cloudflare | https://dash.cloudflare.com/ |
+| Vercel | https://vercel.com/ |
+
+**Live App:** https://monte-carlo-app-ivory.vercel.app/
+**Worker API:** https://monte-carlo-cache.kevinren1128.workers.dev/
 
 ---
 
