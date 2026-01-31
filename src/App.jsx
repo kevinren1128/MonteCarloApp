@@ -6215,10 +6215,11 @@ function MonteCarloSimulator() {
       // Step 1: Load all market data
       setFullLoadProgress({ step: 1, total: steps.length, phase: steps[0].name, detail: 'Fetching prices and returns...' });
       console.log(`\n${'='.repeat(50)}\n🚀 FULL LOAD: Step 1/${steps.length} - ${steps[0].name}\n${'='.repeat(50)}`);
-      
-      // Use smart caching: only fetch incremental data (new trading days / new tickers)
-      // forceRefresh=false enables the positionPriceCache logic to skip already-fetched data
-      const loadedMarketData = await fetchUnifiedMarketData(false);
+
+      // Use forceRefresh=true to ensure fresh data from Worker with proper FX conversion
+      // This guarantees international tickers get correct localCurrency/localPrices/fxRate metadata
+      // Same behavior as "Refresh Prices" which works correctly
+      const loadedMarketData = await fetchUnifiedMarketData(true);
 
       // Verify data was loaded
       const loadedTickers = Object.keys(loadedMarketData || {});
