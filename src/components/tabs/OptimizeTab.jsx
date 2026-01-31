@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { usePortfolioContext, useSimulationContext } from '../../contexts';
+import { usePortfolio, useSimulation } from '../../contexts';
 import { useOptimization } from '../../hooks/useOptimization';
 
 const OptimizeTab = () => {
-  const portfolio = usePortfolioContext();
-  const simulation = useSimulationContext();
+  const portfolio = usePortfolio();
+  const simulation = useSimulation();
   const optimization = useOptimization();
 
   const [config, setConfig] = useState({
