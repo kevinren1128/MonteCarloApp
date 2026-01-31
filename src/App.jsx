@@ -2389,15 +2389,50 @@ function MonteCarloSimulator() {
     let processedCount = 0;
     const totalToProcess = allTickers.length;
     
+    // Helper function to apply Worker metrics to processed data
+    const applyWorkerMetrics = (processed, ticker) => {
+      const workerBeta = workerDerivedMetrics.betas?.[ticker];
+      const workerVol = workerDerivedMetrics.volatility?.[ticker];
+      const workerDist = workerDerivedMetrics.distributions?.[ticker];
+      const workerCalRet = workerDerivedMetrics.calendarReturns?.[ticker];
+
+      if (workerBeta && workerBeta.beta != null) {
+        processed.beta = workerBeta.beta;
+        processed.correlation = workerBeta.correlation;
+        processed.workerSource = true;
+      }
+      if (workerVol && workerVol.annualizedVol != null) {
+        // Worker returns volatility as decimal (0.238), convert to percentage (23.8)
+        processed.volatility = workerVol.annualizedVol * 100;
+        processed.ytdReturn = workerVol.ytdReturn;
+        processed.oneYearReturn = workerVol.oneYearReturn;
+        processed.thirtyDayReturn = workerVol.thirtyDayReturn;
+      }
+      if (workerDist && workerDist.p50 != null) {
+        processed.distribution = {
+          p5: workerDist.p5,
+          p25: workerDist.p25,
+          p50: workerDist.p50,
+          p75: workerDist.p75,
+          p95: workerDist.p95,
+        };
+      }
+      if (workerCalRet && workerCalRet.years) {
+        processed.calendarYearReturns = workerCalRet.years;
+      }
+    };
+
     for (const ticker of allTickers) {
       const histResult = historyResults[ticker];
-      
-      // Use cached data if history fetch was cached
+
+      // FIX: Even if history is cached, still apply Worker metrics (they may be fresher)
       if (histResult?.cached && newData[ticker]) {
+        // Apply Worker metrics to existing cached data
+        applyWorkerMetrics(newData[ticker], ticker);
         processedCount++;
-        continue; // Keep existing processed data
+        continue; // Skip re-processing, but Worker metrics are now applied
       }
-      
+
       const history = histResult?.data;
       const profile = profiles[ticker] || newData[ticker] || {};
 
@@ -2430,42 +2465,14 @@ function MonteCarloSimulator() {
         const processed = processTickerData(ticker, historyForProcessing, profile, spyData, currency, exchangeRate);
 
         // Override with Worker-computed metrics if available (faster, pre-cached)
-        const workerBeta = workerDerivedMetrics.betas?.[ticker];
-        const workerVol = workerDerivedMetrics.volatility?.[ticker];
-        const workerDist = workerDerivedMetrics.distributions?.[ticker];
-        const workerCalRet = workerDerivedMetrics.calendarReturns?.[ticker];
-
-        if (workerBeta && workerBeta.beta != null) {
-          processed.beta = workerBeta.beta;
-          processed.correlation = workerBeta.correlation;
-          processed.workerSource = true;
-        }
-        if (workerVol && workerVol.annualizedVol != null) {
-          // Worker returns volatility as decimal (0.238), convert to percentage (23.8)
-          processed.volatility = workerVol.annualizedVol * 100;
-          processed.ytdReturn = workerVol.ytdReturn;
-          processed.oneYearReturn = workerVol.oneYearReturn;
-          processed.thirtyDayReturn = workerVol.thirtyDayReturn;
-        }
-        if (workerDist && workerDist.p50 != null) {
-          processed.distribution = {
-            p5: workerDist.p5,
-            p25: workerDist.p25,
-            p50: workerDist.p50,
-            p75: workerDist.p75,
-            p95: workerDist.p95,
-          };
-        }
-        if (workerCalRet && workerCalRet.years) {
-          processed.calendarYearReturns = workerCalRet.years;
-        }
+        applyWorkerMetrics(processed, ticker);
 
         newData[ticker] = processed;
       } else if (!newData[ticker]) {
         newData[ticker] = { ticker, error: 'No data available' };
         errors.push(`${ticker}: No historical data available`);
       }
-      
+
       processedCount++;
       // Update progress during processing phase (throttled to every 10 tickers to reduce re-renders)
       if (processedCount % 10 === 0 || processedCount === totalToProcess) {
@@ -2485,15 +2492,18 @@ function MonteCarloSimulator() {
     const yearReturns = {};
     
     Object.entries(newData).forEach(([ticker, d]) => {
-      if (d.beta != null) {
+      // FIX: Populate betas even when beta is null - volatility/returns/sparkline should still show
+      // Only skip if there's truly no useful data at all
+      const hasAnyMetric = d.beta != null || d.volatility != null || d.sparkline?.length > 0 || d.ytdReturn != null;
+      if (hasAnyMetric) {
         betas[ticker] = {
-          beta: d.beta,
+          beta: d.beta,              // May be null for very new tickers
           correlation: d.correlation,
           volatility: d.volatility,
           ytdReturn: d.ytdReturn,
           oneYearReturn: d.oneYearReturn,
           sparklineData: d.sparkline,
-          betaLag: d.betaLag, // Track lag used for international stocks
+          betaLag: d.betaLag,        // Track lag used for international stocks
           isInternational: d.isInternational,
         };
       }
