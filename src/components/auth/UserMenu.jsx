@@ -252,9 +252,9 @@ const styles = {
   },
   dropdown: {
     position: 'absolute',
-    top: '100%',
-    right: '0',
-    marginTop: '8px',
+    bottom: '100%',
+    left: '0',
+    marginBottom: '8px',
     minWidth: '220px',
     background: '#fff',
     borderRadius: '8px',
