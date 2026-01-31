@@ -11,7 +11,7 @@ compatibility_date = "2024-01-01"
 # 3. Copy the namespace ID and paste below
 [[kv_namespaces]]
 binding = "CACHE"
-id = "<YOUR_KV_NAMESPACE_ID>"
+id = "69f4d706eb4943e7af055d297cca3c78"
 # preview_id = "<YOUR_PREVIEW_KV_NAMESPACE_ID>"  # Optional: for wrangler dev
 
 # Environment variables / Secrets

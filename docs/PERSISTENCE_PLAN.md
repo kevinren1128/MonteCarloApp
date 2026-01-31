@@ -87,13 +87,15 @@ VITE_SUPABASE_ANON_KEY=sb_publishable_ERomnJZe6GkrmOYlmy0sRw_4xrC_E9u
 - [x] Save factor results (after factor analysis)
 - [x] Save optimization results (after optimization)
 
-### 🔲 Phase 4: Cloudflare Worker (NOT STARTED)
-- [ ] Create Cloudflare account
-- [ ] Create KV namespace
-- [ ] Deploy `worker/index.js`
-- [ ] Update wrangler.toml with namespace ID
-- [ ] Add VITE_WORKER_URL to .env
-- [ ] Update frontend to use Worker endpoints
+### ✅ Phase 4: Cloudflare Worker (COMPLETE)
+- [x] Create Cloudflare account
+- [x] Create KV namespace (`MONTE_CARLO_CACHE` - ID: 69f4d706eb4943e7af055d297cca3c78)
+- [x] Deploy `worker/index.js`
+- [x] Update wrangler.toml with namespace ID
+- [x] Add VITE_WORKER_URL to .env
+- [x] Frontend already configured to use Worker endpoints (marketService.js)
+
+**Worker URL:** https://monte-carlo-cache.kevinren1128.workers.dev
 
 **Worker Endpoints (already coded in worker/index.js):**
 ```
