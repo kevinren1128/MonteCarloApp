@@ -2228,11 +2228,19 @@ function MonteCarloSimulator() {
 
         // Worker provides USD-converted prices with metadata about original currency
         if (histResult.localCurrency && histResult.fxRate) {
-          // Worker did the conversion - use metadata directly
           const localPrices = histResult.localPrices || [];
           const domesticPrice = localPrices.length > 0 ? localPrices[localPrices.length - 1] : closePrice;
+
+          // For cached data: histResult.data contains LOCAL currency prices (closePrices)
+          // For fresh Worker data: histResult.data contains USD-converted prices
+          // Check if this is cached data by seeing if data matches localPrices
+          const isCachedData = histResult.cached && localPrices.length > 0;
+          const usdPrice = isCachedData
+            ? domesticPrice * histResult.fxRate  // Convert local to USD
+            : closePrice;  // Already in USD from Worker
+
           quickPriceUpdates[ticker] = {
-            currentPrice: closePrice, // Already in USD from Worker
+            currentPrice: usdPrice,
             domesticPrice,
             currency: histResult.localCurrency, // Original currency for display
             exchangeRate: histResult.fxRate,
