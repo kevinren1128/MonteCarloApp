@@ -51,6 +51,7 @@ const CACHE_TTLS = {
   factorExposures: 6 * 60 * 60, // 6 hours (factor betas are relatively stable)
   snapshot: 15 * 60, // 15 minutes (aggregated data, short TTL)
   optimization: 6 * 60 * 60, // 6 hours (expensive computation, relatively stable)
+  metrics: 24 * 60 * 60,    // 24 hours (unified metrics for Positions tab, refreshed by cron)
 };
 
 // ============================================
@@ -134,6 +135,9 @@ export default {
       } else if (path.startsWith('/api/volatility')) {
         handler = 'volatility';
         response = await handleVolatility(url, env, requestId);
+      } else if (path.startsWith('/api/metrics')) {
+        handler = 'metrics';
+        response = await handleMetrics(url, env, requestId);
       } else if (path.startsWith('/api/distribution')) {
         handler = 'distribution';
         response = await handleDistribution(url, env, requestId);
@@ -159,10 +163,10 @@ export default {
         handler = 'health';
         response = jsonResponse({
           status: 'ok',
-          version: '2.6.0',
+          version: '2.7.0',
           endpoints: [
             '/api/prices', '/api/quotes', '/api/profile', '/api/consensus', '/api/fx',
-            '/api/beta', '/api/volatility', '/api/distribution', '/api/calendar-returns',
+            '/api/beta', '/api/volatility', '/api/metrics', '/api/distribution', '/api/calendar-returns',
             '/api/correlation', '/api/factor-exposures', '/api/snapshot', '/api/optimize'
           ],
           kvBound: !!env.CACHE,
@@ -1162,6 +1166,211 @@ async function handleVolatility(url, env, requestId) {
   await Promise.all(promises);
 
   log.info('Volatility complete', { requestId, symbolCount: symbols.length, ...cacheStats });
+  return jsonResponse(results);
+}
+
+/**
+ * Unified metrics for Positions tab - combines beta, volatility, returns, sparkline
+ * GET /api/metrics?symbols=AAPL,MSFT,GOOGL
+ *
+ * Returns pre-computed metrics with 24h cache TTL (refreshed by daily cron)
+ * This is the primary endpoint for fast Positions tab loading.
+ */
+async function handleMetrics(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const benchmark = url.searchParams.get('benchmark') || 'SPY';
+  const range = url.searchParams.get('range') || '1y';
+  const interval = url.searchParams.get('interval') || '1d';
+
+  if (symbols.length === 0) {
+    return jsonResponse({ error: 'symbols parameter required' }, 400);
+  }
+
+  log.info('Fetching metrics', { requestId, symbols: symbols.length, benchmark, range });
+
+  const results = {};
+  const cacheStats = { hits: 0, misses: 0, computed: 0 };
+
+  // First, get benchmark prices (needed for beta calculations)
+  const benchmarkKey = `prices:v1:${benchmark}:${range}:${interval}`;
+  let benchmarkData = await getCached(env, benchmarkKey, requestId);
+  if (!benchmarkData) {
+    benchmarkData = await fetchYahooChart(benchmark, range, interval, requestId);
+    if (benchmarkData) {
+      await setCache(env, benchmarkKey, benchmarkData, CACHE_TTLS.prices, requestId);
+    }
+  }
+
+  const benchmarkReturns = benchmarkData?.prices?.length > 0
+    ? computeDailyReturns(benchmarkData.prices)
+    : [];
+  const benchmarkTimestamps = benchmarkData?.timestamps || [];
+
+  // Helper to detect international stocks
+  const isInternationalTicker = (symbol, currency) => {
+    return currency !== 'USD' ||
+      /^\d+$/.test(symbol) ||                    // Pure numeric (Japan: 6525)
+      /^\d+\.(T|HK|SS|SZ|TW)$/.test(symbol) ||   // Asian exchanges
+      /\.(AS|PA|DE|L|MI|MC|SW|AX|TO|V)$/i.test(symbol);  // European/other
+  };
+
+  // Helper to compute beta with lag testing for international stocks
+  const computeBetaWithLag = (returns, timestamps, isIntl) => {
+    if (!returns?.length || returns.length < 30 || benchmarkReturns.length < 30) {
+      return { beta: null, correlation: null, betaLag: 0 };
+    }
+
+    // For domestic stocks, simple correlation without lag
+    if (!isIntl || !timestamps?.length || !benchmarkTimestamps?.length) {
+      const { beta, correlation } = computeBetaCorrelation(returns, benchmarkReturns);
+      return { beta, correlation, betaLag: 0 };
+    }
+
+    // For international stocks, test different lags (-1, 0, +1 days)
+    const lags = [-1, 0, 1];
+    let bestResult = { beta: null, correlation: null, betaLag: 0 };
+    let bestAbsCorr = -1;
+
+    for (const lag of lags) {
+      // Build date maps for alignment
+      const posDateMap = new Map();
+      const spyDateMap = new Map();
+
+      // Map position returns by date
+      for (let i = 0; i < returns.length && i < timestamps.length; i++) {
+        const ts = timestamps[i];
+        if (ts) {
+          const date = new Date(ts);
+          date.setDate(date.getDate() + lag); // Apply lag
+          const dateKey = date.toISOString().split('T')[0];
+          posDateMap.set(dateKey, returns[i]);
+        }
+      }
+
+      // Map benchmark returns by date
+      for (let i = 0; i < benchmarkReturns.length && i < benchmarkTimestamps.length; i++) {
+        const ts = benchmarkTimestamps[i];
+        if (ts) {
+          const dateKey = new Date(ts).toISOString().split('T')[0];
+          spyDateMap.set(dateKey, benchmarkReturns[i]);
+        }
+      }
+
+      // Align by matching dates
+      const alignedPos = [];
+      const alignedSpy = [];
+      for (const [dateKey, posReturn] of posDateMap) {
+        const spyReturn = spyDateMap.get(dateKey);
+        if (spyReturn !== undefined) {
+          alignedPos.push(posReturn);
+          alignedSpy.push(spyReturn);
+        }
+      }
+
+      if (alignedPos.length >= 30) {
+        const { beta, correlation } = computeBetaCorrelation(alignedPos, alignedSpy);
+        const absCorr = Math.abs(correlation || 0);
+
+        if (absCorr > bestAbsCorr) {
+          bestAbsCorr = absCorr;
+          bestResult = { beta, correlation, betaLag: lag };
+        }
+      }
+    }
+
+    return bestResult;
+  };
+
+  // Process each symbol
+  const promises = symbols.map(async (symbol) => {
+    const upperSymbol = symbol.toUpperCase();
+    const cacheKey = `metrics:v1:${upperSymbol}`;
+
+    // Check cache first
+    let data = await getCached(env, cacheKey, requestId);
+    if (data) {
+      results[symbol] = { ...data, cached: true };
+      cacheStats.hits++;
+      return;
+    }
+
+    cacheStats.misses++;
+
+    // Get price data for this symbol
+    const priceKey = `prices:v1:${upperSymbol}:${range}:${interval}`;
+    let priceData = await getCached(env, priceKey, requestId);
+    if (!priceData) {
+      priceData = await fetchYahooChart(symbol, range, interval, requestId);
+      if (priceData) {
+        await setCache(env, priceKey, priceData, CACHE_TTLS.prices, requestId);
+      }
+    }
+
+    if (!priceData?.prices?.length || priceData.prices.length < 10) {
+      results[symbol] = { error: 'Insufficient price data', minRequired: 10 };
+      return;
+    }
+
+    const prices = priceData.prices;
+    const timestamps = priceData.timestamps || [];
+    const currency = priceData.currency || 'USD';
+
+    // Detect if international
+    const isIntl = isInternationalTicker(symbol, currency);
+
+    // Compute all metrics
+    const dailyReturns = computeDailyReturns(prices);
+    const returnTimestamps = timestamps.slice(1); // Align with returns (first return is day 2)
+
+    // Beta with lag testing for international stocks
+    const { beta, correlation, betaLag } = symbol.toUpperCase() === benchmark.toUpperCase()
+      ? { beta: 1.0, correlation: 1.0, betaLag: 0 }
+      : computeBetaWithLag(dailyReturns, returnTimestamps, isIntl);
+
+    // Volatility
+    const annualizedVol = computeAnnualizedVolatility(dailyReturns);
+    const volatility = annualizedVol != null ? annualizedVol * 100 : null; // Convert to percentage
+
+    // Returns
+    const { ytdReturn, oneYearReturn, thirtyDayReturn } = computeReturns(prices, timestamps);
+
+    // Sparkline (last 30 prices)
+    const sparkline = prices.slice(-30);
+
+    // Latest price
+    const latestPrice = prices[prices.length - 1];
+
+    cacheStats.computed++;
+
+    data = {
+      symbol: upperSymbol,
+      benchmark,
+      // Core metrics
+      beta,
+      correlation,
+      volatility,        // Percentage (e.g., 28.5 for 28.5%)
+      ytdReturn,         // Decimal (e.g., 0.12 for 12%)
+      oneYearReturn,     // Decimal
+      thirtyDayReturn,   // Decimal
+      // Display data
+      sparkline,         // Last 30 prices
+      latestPrice,
+      // International stock handling
+      isInternational: isIntl,
+      betaLag: isIntl ? betaLag : undefined,
+      // Metadata
+      currency,
+      pointsUsed: prices.length,
+      asOf: new Date().toISOString().split('T')[0],
+    };
+
+    await setCache(env, cacheKey, data, CACHE_TTLS.metrics, requestId);
+    results[symbol] = data;
+  });
+
+  await Promise.all(promises);
+
+  log.info('Metrics complete', { requestId, symbolCount: symbols.length, ...cacheStats });
   return jsonResponse(results);
 }
 
