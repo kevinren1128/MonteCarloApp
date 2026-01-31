@@ -2448,16 +2448,18 @@ function MonteCarloSimulator() {
   };
   
   // Apply correlation floors based on user-edited correlation groups (uses position IDs)
-  const applyCorrelationFloors = (groupFloor = 0.55) => {
-    if (!editedCorrelation || !correlationGroups) return { adjustments: [], matrix: null };
-    
+  // Optional groupsOverride parameter allows passing groups directly (for Load All flow)
+  const applyCorrelationFloors = (groupFloor = 0.55, groupsOverride = null) => {
+    const activeGroups = groupsOverride || correlationGroups;
+    if (!editedCorrelation || !activeGroups) return { adjustments: [], matrix: null };
+
     const n = positions.length;
     const newCorr = editedCorrelation.map(row => [...row]);
     let adjustments = [];
-    
+
     // Build a map of position ID -> groups it belongs to
     const posIdToGroups = {};
-    for (const [group, posIds] of Object.entries(correlationGroups)) {
+    for (const [group, posIds] of Object.entries(activeGroups)) {
       for (const posId of posIds) {
         if (!posIdToGroups[posId]) posIdToGroups[posId] = [];
         posIdToGroups[posId].push(group);
@@ -5896,17 +5898,37 @@ function MonteCarloSimulator() {
       await new Promise(r => setTimeout(r, 300));
       
       // Step 5: Apply correlation floors (if correlation groups are defined)
-      setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Enforcing group correlation minimums...' });
+      setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Loading position classifications...' });
       console.log(`\n${'='.repeat(50)}\n🏗️ FULL LOAD: Step 5/${steps.length} - ${steps[4].name}\n${'='.repeat(50)}`);
-      
-      if (correlationGroups && Object.values(correlationGroups).some(arr => arr.length > 0)) {
-        const { adjustments, matrix } = applyCorrelationFloors(0.55);
+
+      // Auto-detect correlation groups from cached position metadata
+      // This ensures that previously classified positions are used even if groups weren't explicitly set
+      let groupsToUse = correlationGroups;
+      const hasExistingGroups = correlationGroups && Object.values(correlationGroups).some(arr => arr.length > 0);
+
+      if (!hasExistingGroups && positionMetadata && Object.keys(positionMetadata).length > 0) {
+        console.log('[LoadAll] Found cached position metadata, auto-detecting correlation groups...');
+        setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Auto-detecting sector/industry groups...' });
+        // detectCorrelationGroups returns the groups AND updates state
+        const detectedGroups = detectCorrelationGroups(positionMetadata);
+        if (detectedGroups && Object.keys(detectedGroups).length > 0) {
+          groupsToUse = detectedGroups;
+          console.log(`[LoadAll] Auto-detected ${Object.keys(detectedGroups).length} correlation groups from cached metadata:`, Object.keys(detectedGroups));
+        }
+      }
+
+      setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Enforcing group correlation minimums...' });
+
+      // Apply correlation floors using the groups (either existing or newly detected)
+      if (groupsToUse && Object.values(groupsToUse).some(arr => arr.length > 0)) {
+        // Pass groupsToUse directly to avoid closure issues with state
+        const { adjustments, matrix } = applyCorrelationFloors(0.55, groupsToUse);
         if (matrix) {
           finalCorrelation = matrix;
         }
         console.log(`Applied ${adjustments?.length || 0} correlation floor adjustments`);
       } else {
-        console.log('No correlation groups defined, skipping floor adjustments');
+        console.log('No correlation groups defined (no cached metadata), skipping floor adjustments');
       }
       await new Promise(r => setTimeout(r, 300));
       
