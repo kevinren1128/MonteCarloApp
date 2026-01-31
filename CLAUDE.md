@@ -84,3 +84,14 @@ Read `docs/ARCHITECTURE.md` first for comprehensive system documentation, algori
 - Uncertain about the best approach
 
 This provides a second perspective and catches potential issues early.
+
+### FMP API Documentation
+
+The Consensus Tab uses Financial Modeling Prep (FMP) API. Documentation is at:
+**https://site.financialmodelingprep.com/developer/docs**
+
+Key endpoints used:
+- `/stable/enterprise-values` - Market cap, EV, debt, cash
+- `/stable/key-metrics` - Financial ratios and metrics
+- `/stable/analyst-estimates` - Revenue, EPS, EBITDA estimates
+- `/stable/earnings` - Historical and upcoming earnings

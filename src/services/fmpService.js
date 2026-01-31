@@ -356,25 +356,27 @@ export const fetchQuote = async (ticker, apiKey) => {
  */
 export const fetchEnterpriseValue = async (ticker, apiKey) => {
   try {
-    // Use path parameter format per FMP API docs: /enterprise-values/{symbol}
-    const data = await fetchFMP(`/enterprise-values/${ticker}?limit=1`, apiKey);
+    // Use query parameter format for stable API
+    const data = await fetchFMP(`/enterprise-values?symbol=${ticker}&limit=1`, apiKey);
 
     if (!data || data.length === 0) {
       return null;
     }
 
     const ev = data[0];
-    console.log('[FMP] Enterprise value fields for', ticker, ':', Object.keys(ev), ev);
+    console.log('[FMP] Enterprise value raw data for', ticker, ':', ev);
 
+    // FMP stable API field names (log shows actual structure)
+    // Common field names: enterpriseValue, marketCapitalization, addTotalDebt, minusCashAndCashEquivalents
+    // Also check for alternate naming conventions
     return {
-      // Note: FMP API returns 'enterpriseValue' (camelCase)
-      enterpriseValue: ev.enterpriseValue || ev['Enterprise Value'],
-      marketCap: ev.marketCapitalization || ev.marketCap || ev['Market Cap'],
-      totalDebt: ev.addTotalDebt || ev.totalDebt,
-      cashAndEquivalents: ev.minusCashAndCashEquivalents || ev.cashAndCashEquivalents,
-      // Additional EV-related metrics
-      evToSales: ev.evToSales || ev['EV to Sales'],
-      evToEbitda: ev.enterpriseValueOverEBITDA || ev['Enterprise Value over EBITDA'],
+      enterpriseValue: ev.enterpriseValue ?? ev.enterpriseVal ?? ev['Enterprise Value'] ?? null,
+      marketCap: ev.marketCapitalization ?? ev.marketCap ?? ev['Market Cap'] ?? null,
+      // FMP uses "addTotalDebt" (positive) and "minusCashAndCashEquivalents" (negative in EV calc)
+      totalDebt: ev.addTotalDebt ?? ev.totalDebt ?? ev['Total Debt'] ?? null,
+      cashAndEquivalents: ev.minusCashAndCashEquivalents ?? ev.cashAndCashEquivalents ?? ev['Cash'] ?? null,
+      // Number of shares for per-share calculations
+      numberOfShares: ev.numberOfShares ?? ev.sharesOutstanding ?? null,
     };
   } catch (err) {
     console.warn(`Failed to fetch enterprise value for ${ticker}:`, err);
@@ -444,52 +446,71 @@ export const fetchKeyMetrics = async (ticker, apiKey) => {
 
 /**
  * Fetch financial ratios (profitability, liquidity, solvency)
+ * Fetches both TTM and annual data for comprehensive coverage
  */
 export const fetchFinancialRatios = async (ticker, apiKey) => {
   try {
-    const data = await fetchFMP(`/ratios?symbol=${ticker}&period=annual&limit=3`, apiKey);
+    // Fetch both TTM and annual ratios for comprehensive data
+    // TTM endpoint: /ratios-ttm?symbol=X (per FMP docs)
+    // Annual endpoint: /ratios?symbol=X&period=annual
+    const [ttmData, annualData] = await Promise.all([
+      fetchFMP(`/ratios-ttm?symbol=${ticker}`, apiKey).catch((err) => {
+        console.warn(`[FMP] TTM ratios failed for ${ticker}:`, err.message);
+        return null;
+      }),
+      fetchFMP(`/ratios?symbol=${ticker}&period=annual&limit=3`, apiKey).catch(() => null),
+    ]);
 
-    if (!data || data.length === 0) {
-      return null;
-    }
+    const ttm = ttmData?.[0] || {};
+    const annual = annualData || [];
+    const latest = annual[0] || {};
 
-    const latest = data[0];
     // Log all available ratio fields
-    console.log('[FMP] Ratios fields for', ticker, ':', Object.keys(latest));
+    console.log('[FMP] TTM Ratios for', ticker, ':', Object.keys(ttm));
+    console.log('[FMP] Annual Ratios for', ticker, ':', Object.keys(latest));
 
     // Calculate 3Y averages for key ratios
     const avg = (field) => {
-      const values = data.map(d => d[field]).filter(v => v != null && !isNaN(v));
+      const values = annual.map(d => d[field]).filter(v => v != null && !isNaN(v));
       return values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : null;
     };
 
     return {
-      // Latest values
-      grossProfitMargin: latest.grossProfitMargin,
-      operatingProfitMargin: latest.operatingProfitMargin,
-      netProfitMargin: latest.netProfitMargin,
-      returnOnEquity: latest.returnOnEquity,
-      returnOnAssets: latest.returnOnAssets,
-      returnOnCapitalEmployed: latest.returnOnCapitalEmployed,
-      debtRatio: latest.debtRatio,
-      // Valuation ratios
-      priceToBookRatio: latest.priceToBookRatio || latest.priceBookValueRatio,
-      priceEarningsRatio: latest.priceEarningsRatio,
-      priceToSalesRatio: latest.priceToSalesRatio,
-      dividendYield: latest.dividendYield,
-      debtEquityRatio: latest.debtEquityRatio,
-      interestCoverage: latest.interestCoverage,
-      currentRatio: latest.currentRatio,
-      quickRatio: latest.quickRatio,
-      cashRatio: latest.cashRatio,
-      assetTurnover: latest.assetTurnover,
-      inventoryTurnover: latest.inventoryTurnover,
-      receivablesTurnover: latest.receivablesTurnover,
-      payablesTurnover: latest.payablesTurnover,
-      operatingCashFlowPerShare: latest.operatingCashFlowPerShare,
-      freeCashFlowPerShare: latest.freeCashFlowPerShare,
-      priceToOperatingCashFlowsRatio: latest.priceToOperatingCashFlowsRatio,
-      priceToFreeCashFlowsRatio: latest.priceToFreeCashFlowsRatio,
+      // TTM values (preferred for current valuation)
+      grossProfitMargin: ttm.grossProfitMarginTTM ?? latest.grossProfitMargin,
+      operatingProfitMargin: ttm.operatingProfitMarginTTM ?? latest.operatingProfitMargin,
+      netProfitMargin: ttm.netProfitMarginTTM ?? latest.netProfitMargin,
+      returnOnEquity: ttm.returnOnEquityTTM ?? latest.returnOnEquity,
+      returnOnAssets: ttm.returnOnAssetsTTM ?? latest.returnOnAssets,
+      returnOnCapitalEmployed: ttm.returnOnCapitalEmployedTTM ?? latest.returnOnCapitalEmployed,
+      debtRatio: ttm.debtRatioTTM ?? latest.debtRatio,
+      // Valuation ratios - prioritize TTM for current market valuations
+      priceToBookRatio: ttm.priceToBookRatioTTM ?? latest.priceToBookRatio ?? latest.priceBookValueRatio,
+      priceEarningsRatio: ttm.priceEarningsRatioTTM ?? latest.priceEarningsRatio,
+      priceToSalesRatio: ttm.priceToSalesRatioTTM ?? latest.priceToSalesRatio,
+      priceToFreeCashFlowsRatio: ttm.priceToFreeCashFlowsRatioTTM ?? latest.priceToFreeCashFlowsRatio,
+      priceToOperatingCashFlowsRatio: ttm.priceToOperatingCashFlowsRatioTTM ?? latest.priceToOperatingCashFlowsRatio,
+      // Cash flow per share
+      freeCashFlowPerShare: ttm.freeCashFlowPerShareTTM ?? latest.freeCashFlowPerShare,
+      operatingCashFlowPerShare: ttm.operatingCashFlowPerShareTTM ?? latest.operatingCashFlowPerShare,
+      // FCF Yield (inverse of P/FCF)
+      freeCashFlowYield: ttm.priceToFreeCashFlowsRatioTTM
+        ? 1 / ttm.priceToFreeCashFlowsRatioTTM
+        : (latest.priceToFreeCashFlowsRatio ? 1 / latest.priceToFreeCashFlowsRatio : null),
+      dividendYield: ttm.dividendYieldTTM ?? latest.dividendYield,
+      debtEquityRatio: ttm.debtEquityRatioTTM ?? latest.debtEquityRatio,
+      interestCoverage: ttm.interestCoverageTTM ?? latest.interestCoverage,
+      currentRatio: ttm.currentRatioTTM ?? latest.currentRatio,
+      quickRatio: ttm.quickRatioTTM ?? latest.quickRatio,
+      cashRatio: ttm.cashRatioTTM ?? latest.cashRatio,
+      assetTurnover: ttm.assetTurnoverTTM ?? latest.assetTurnover,
+      inventoryTurnover: ttm.inventoryTurnoverTTM ?? latest.inventoryTurnover,
+      receivablesTurnover: ttm.receivablesTurnoverTTM ?? latest.receivablesTurnover,
+      payablesTurnover: ttm.payablesTurnoverTTM ?? latest.payablesTurnover,
+      // EV/Sales from TTM
+      enterpriseValueMultiple: ttm.enterpriseValueMultipleTTM ?? null,
+      evToSales: ttm.evToSalesTTM ?? null,
+      evToFreeCashFlow: ttm.evToFreeCashFlowTTM ?? null,
       // 3Y averages
       avgROE: avg('returnOnEquity'),
       avgROA: avg('returnOnAssets'),
@@ -604,6 +625,9 @@ export const fetchIncomeStatement = async (ticker, apiKey) => {
       operatingIncomeRatio: latest.operatingIncomeRatio,
       netIncome: latest.netIncome,
       netIncomeRatio: latest.netIncomeRatio,
+      // IMPORTANT: Capture reporting currency from financial statements
+      // This is the actual currency the company reports in (e.g., TWD for TSM)
+      reportedCurrency: latest.reportedCurrency ?? latest.currency ?? null,
       // Historical time series (up to 5 years)
       historical,
     };
@@ -917,17 +941,22 @@ export const fetchConsensusData = async (ticker, apiKey) => {
     return null;
   }
 
-  // Detect reporting currency and get exchange rate to USD
-  const reportingCurrency = quote?.currency || 'USD';
+  // Detect reporting currency from income statement (more reliable than quote for ADRs)
+  // For ADRs like TSM: quote.currency = USD (trading currency) but income.reportedCurrency = TWD (reporting currency)
+  // The analyst estimates are in the REPORTING currency, not the trading currency
+  const reportingCurrency = income?.reportedCurrency || quote?.currency || 'USD';
+  const tradingCurrency = quote?.currency || 'USD';
+
+  // Get exchange rate for converting reporting currency values to USD
   const exchangeRate = reportingCurrency !== 'USD'
     ? await fetchExchangeRate(reportingCurrency, apiKey)
     : 1;
 
-  // Helper to convert monetary values to USD
+  // Helper to convert monetary values from reporting currency to USD
   const toUSD = (val) => convertToUSD(val, exchangeRate);
 
   if (reportingCurrency !== 'USD') {
-    console.log(`[FMP] Converting ${ticker} from ${reportingCurrency} to USD (rate: ${exchangeRate})`);
+    console.log(`[FMP] ${ticker}: Trading in ${tradingCurrency}, Reporting in ${reportingCurrency}, FX rate: ${exchangeRate}`);
   }
 
   // Calculate forward metrics (convert to USD)
@@ -1051,8 +1080,21 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       netIncome: fy0NetIncome,
     },
 
-    // Valuation multiples (using FY1)
+    // Forward valuation multiples (FY1 = current fiscal year, FY2 = next fiscal year)
     multiples: {
+      // FY1 multiples
+      fy1PE: fy1Eps ? price / fy1Eps : null,
+      fy1EvToEbitda: fy1Ebitda ? enterpriseValue / fy1Ebitda : null,
+      fy1EvToEbit: fy1Ebit ? enterpriseValue / fy1Ebit : null,
+      fy1PriceToSales: fy1Revenue ? marketCap / fy1Revenue : null,
+      fy1EvToSales: fy1Revenue ? enterpriseValue / fy1Revenue : null,
+      // FY2 multiples (next year forward)
+      fy2PE: fy2Eps ? price / fy2Eps : null,
+      fy2EvToEbitda: fy2Ebitda ? enterpriseValue / fy2Ebitda : null,
+      fy2EvToEbit: fy2Ebit ? enterpriseValue / fy2Ebit : null,
+      fy2PriceToSales: fy2Revenue ? marketCap / fy2Revenue : null,
+      fy2EvToSales: fy2Revenue ? enterpriseValue / fy2Revenue : null,
+      // Legacy field names for backwards compatibility
       forwardPE: fy1Eps ? price / fy1Eps : null,
       evToEbitda: fy1Ebitda ? enterpriseValue / fy1Ebitda : null,
       evToEbit: fy1Ebit ? enterpriseValue / fy1Ebit : null,
@@ -1076,7 +1118,7 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       roic: metrics?.roic || ratios?.returnOnCapitalEmployed,
       avgROE: ratios?.avgROE,
       avgROA: ratios?.avgROA,
-      freeCashFlowYield: metrics?.freeCashFlowYield,
+      freeCashFlowYield: ratios?.freeCashFlowYield || metrics?.freeCashFlowYield,
     },
 
     // Balance Sheet Health
@@ -1096,7 +1138,11 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       operatingCashFlow: toUSD(cashFlowStmt?.operatingCashFlow),
       operatingCashFlowPerShare: toUSD(ratios?.operatingCashFlowPerShare),
       capitalExpenditure: toUSD(cashFlowStmt?.capitalExpenditure),
+      // TTM Valuation ratios from ratios endpoint
       priceToFCF: ratios?.priceToFreeCashFlowsRatio,
+      fcfYield: ratios?.freeCashFlowYield,
+      evToSales: ratios?.evToSales,
+      evToFreeCashFlow: ratios?.evToFreeCashFlow,
       priceToBook: ratios?.priceToBookRatio || metrics?.pbRatio,
       dividendYield: ratios?.dividendYield || metrics?.dividendYield,
       payoutRatio: metrics?.payoutRatio,
@@ -1175,7 +1221,8 @@ export const fetchConsensusData = async (ticker, apiKey) => {
 
     // Currency info
     currency: {
-      reporting: reportingCurrency,
+      reporting: reportingCurrency,  // Currency used in financial statements
+      trading: tradingCurrency,      // Currency used for stock price (usually USD for ADRs)
       exchangeRate: exchangeRate,
       isConverted: reportingCurrency !== 'USD',
     },
