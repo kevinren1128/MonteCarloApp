@@ -918,11 +918,56 @@ export const fetchCashFlowStatement = async (ticker, apiKey) => {
 };
 
 /**
- * Fetch all consensus data for a single ticker (enhanced with 12 API calls)
+ * Fetch balance sheet statement for debt and cash data
+ * This provides more reliable capital structure data than enterprise-values endpoint
+ * @param {string} ticker - Ticker symbol
+ * @param {string} apiKey - FMP API key
+ * @returns {Promise<Object>} Balance sheet data
+ */
+export const fetchBalanceSheet = async (ticker, apiKey) => {
+  try {
+    const data = await fetchFMP(`/balance-sheet-statement?symbol=${ticker}&period=annual&limit=1`, apiKey);
+
+    if (!data || data.length === 0) return null;
+
+    const bs = data[0];
+    console.log('[FMP] Balance sheet fields for', ticker, ':', Object.keys(bs));
+
+    // Calculate total debt (short-term + long-term)
+    const shortTermDebt = bs.shortTermDebt || bs.shortTermBorrowings || 0;
+    const longTermDebt = bs.longTermDebt || 0;
+    const totalDebt = bs.totalDebt || (shortTermDebt + longTermDebt);
+
+    // Cash and equivalents
+    const cash = bs.cashAndCashEquivalents || bs.cashAndShortTermInvestments || 0;
+
+    // Net debt = Total Debt - Cash
+    const netDebt = totalDebt - cash;
+
+    return {
+      totalDebt,
+      shortTermDebt,
+      longTermDebt,
+      cashAndCashEquivalents: cash,
+      netDebt,
+      totalAssets: bs.totalAssets || 0,
+      totalLiabilities: bs.totalLiabilities || 0,
+      totalEquity: bs.totalStockholdersEquity || bs.totalEquity || 0,
+      reportedCurrency: bs.reportedCurrency || null,
+      date: bs.date,
+    };
+  } catch (err) {
+    console.warn(`Failed to fetch balance sheet for ${ticker}:`, err);
+    return null;
+  }
+};
+
+/**
+ * Fetch all consensus data for a single ticker (enhanced with 13 API calls)
  */
 export const fetchConsensusData = async (ticker, apiKey) => {
-  // Fetch all data in parallel (12 API calls per ticker)
-  const [estimates, quote, ev, metrics, income, priceTargets, ratings, growth, earnings, ratios, scores, cashFlowStmt] = await Promise.all([
+  // Fetch all data in parallel (13 API calls per ticker)
+  const [estimates, quote, ev, metrics, income, priceTargets, ratings, growth, earnings, ratios, scores, cashFlowStmt, balanceSheet] = await Promise.all([
     fetchAnalystEstimates(ticker, apiKey),
     fetchQuote(ticker, apiKey),
     fetchEnterpriseValue(ticker, apiKey),
@@ -935,6 +980,7 @@ export const fetchConsensusData = async (ticker, apiKey) => {
     fetchFinancialRatios(ticker, apiKey),
     fetchFinancialScores(ticker, apiKey),
     fetchCashFlowStatement(ticker, apiKey),
+    fetchBalanceSheet(ticker, apiKey),
   ]);
 
   if (!estimates && !quote) {
@@ -963,31 +1009,39 @@ export const fetchConsensusData = async (ticker, apiKey) => {
   const price = toUSD(quote?.price) || 0;
   const marketCap = toUSD(quote?.marketCap || ev?.marketCap) || 0;
 
-  // Calculate EV: prefer API value, but fallback to Market Cap + Debt - Cash
-  const rawEV = ev?.enterpriseValue;
-  const totalDebt = ev?.totalDebt || 0;
-  const cash = ev?.cashAndEquivalents || 0;
-  const calculatedEV = marketCap + totalDebt - cash;
+  // Get debt and cash from balance sheet (more reliable than enterprise-values endpoint)
+  // Balance sheet data is in reporting currency, need to convert to USD
+  const totalDebt = toUSD(balanceSheet?.totalDebt) || toUSD(ev?.totalDebt) || 0;
+  const cash = toUSD(balanceSheet?.cashAndCashEquivalents) || toUSD(ev?.cashAndEquivalents) || 0;
 
-  // Use API EV if it's reasonable (within 50% of calculated), otherwise use calculated
-  // This catches cases where API returns obviously wrong values
+  // Calculate net debt directly from balance sheet: Total Debt - Cash
+  // This is more reliable than EV - Market Cap which has currency mixing issues
+  const netDebt = totalDebt - cash;
+
+  // Calculate EV: Market Cap + Total Debt - Cash (all converted to USD)
+  // Note: marketCap from quote is already in trading currency (usually USD for ADRs)
+  // For proper EV, we should use the market cap in USD
+  const calculatedEV = marketCap + netDebt;
+
+  // Also try API's enterprise value for comparison
+  const rawEV = ev?.enterpriseValue;
   let enterpriseValue;
-  if (rawEV && calculatedEV > 0) {
-    const ratio = rawEV / calculatedEV;
-    if (ratio > 0.5 && ratio < 2.0) {
-      enterpriseValue = toUSD(rawEV);
-    } else {
-      console.warn(`[FMP] EV mismatch for ${ticker}: API=${rawEV}, Calculated=${calculatedEV}. Using calculated.`);
-      enterpriseValue = toUSD(calculatedEV);
+
+  // Use calculated EV (more reliable with proper currency handling)
+  // Only use API EV if calculated EV is zero or missing
+  if (calculatedEV > 0) {
+    enterpriseValue = calculatedEV;
+    if (rawEV && Math.abs(rawEV - calculatedEV) / calculatedEV > 0.3) {
+      console.log(`[FMP] ${ticker}: EV API=${(rawEV/1e9).toFixed(1)}B vs Calculated=${(calculatedEV/1e9).toFixed(1)}B (using calculated)`);
     }
   } else if (rawEV) {
     enterpriseValue = toUSD(rawEV);
+    console.log(`[FMP] ${ticker}: Using API EV (calculated EV is zero)`);
   } else {
-    enterpriseValue = toUSD(calculatedEV);
+    enterpriseValue = marketCap; // Fallback: assume no net debt
   }
 
-  // Calculate net debt from EV - Market Cap (more reliable if EV is correct)
-  const netDebt = enterpriseValue - marketCap;
+  console.log(`[FMP] ${ticker} Capital: MarketCap=${(marketCap/1e9).toFixed(1)}B, Debt=${(totalDebt/1e9).toFixed(1)}B, Cash=${(cash/1e9).toFixed(1)}B, NetDebt=${(netDebt/1e9).toFixed(1)}B, EV=${(enterpriseValue/1e9).toFixed(1)}B`);
 
   // FY1 calculations (convert to USD)
   const fy1Revenue = toUSD(estimates?.fy1?.revenue) || 0;
@@ -1164,12 +1218,16 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       })),
     },
 
-    // Balance sheet data for display (converted to USD)
+    // Balance sheet data for display (already converted to USD above)
     balanceSheet: {
-      totalDebt: toUSD(totalDebt),
-      cashAndEquivalents: toUSD(cash),
-      // Net Debt calculated from EV - Market Cap (more reliable)
+      totalDebt: totalDebt,
+      shortTermDebt: toUSD(balanceSheet?.shortTermDebt) || 0,
+      longTermDebt: toUSD(balanceSheet?.longTermDebt) || 0,
+      cashAndEquivalents: cash,
       netDebt: netDebt,
+      totalAssets: toUSD(balanceSheet?.totalAssets) || 0,
+      totalLiabilities: toUSD(balanceSheet?.totalLiabilities) || 0,
+      totalEquity: toUSD(balanceSheet?.totalEquity) || 0,
     },
 
     // Efficiency
