@@ -1470,18 +1470,99 @@ function MonteCarloSimulator() {
     loadServerData();
   }, [authState.isAuthenticated, loadFromServer, showToast]);
 
-  // Reset load flag when user logs out
+  // Track previous auth state to detect sign-out
+  const wasAuthenticatedRef = useRef(authState.isAuthenticated);
+
+  // Ref to track last saved positions (for deduping sync calls)
+  const lastSavedPositionsRef = useRef(null);
+
+  // Reset app state when user logs out
   useEffect(() => {
-    if (!authState.isAuthenticated) {
+    const wasAuthenticated = wasAuthenticatedRef.current;
+    const isAuthenticated = authState.isAuthenticated;
+
+    // Update ref for next render
+    wasAuthenticatedRef.current = isAuthenticated;
+
+    // Only trigger reset on sign-out (was authenticated, now not)
+    if (wasAuthenticated && !isAuthenticated) {
+      console.log('[App] User signed out - resetting to default state');
+
+      // Reset positions to default
+      const defaultPositions = [
+        { id: 1, ticker: 'SPY', quantity: 100, type: 'ETF', price: 450,
+          p5: -0.20, p25: 0.02, p50: 0.10, p75: 0.18, p95: 0.35 },
+        { id: 2, ticker: 'QQQ', quantity: 50, type: 'ETF', price: 380,
+          p5: -0.30, p25: -0.02, p50: 0.12, p75: 0.26, p95: 0.50 },
+        { id: 3, ticker: 'GLD', quantity: 30, type: 'ETF', price: 185,
+          p5: -0.10, p25: 0.00, p50: 0.05, p75: 0.10, p95: 0.20 },
+      ];
+      setPositions(defaultPositions);
+
+      // Reset cash balance
+      setCashBalance(0);
+      setCashRate(0.05);
+
+      // Reset market data
+      setHistoricalData({});
+      setUnifiedMarketData({});
+      setPositionBetas({});
+      setPositionMetadata({});
+      setCalendarYearReturns({});
+      setFetchErrors([]);
+      setDataSource('none');
+
+      // Reset correlation
+      setCorrelationMatrix(null);
+      setEditedCorrelation(null);
+      setCorrelationMethod('shrinkage');
+      setCorrelationGroups(null);
+
+      // Reset factor analysis
+      setFactorData(null);
+      setFactorAnalysis(null);
+      setThematicOverrides({});
+
+      // Reset simulation results
+      setSimulationResults(null);
+
+      // Reset optimization
+      setOptimizationResults(null);
+      setSelectedSwap(null);
+      setSwapValidationResults(null);
+      setThematicSwapResults(null);
+
+      // Reset UI state
+      setActiveTab('positions');
+      setLagAnalysis(null);
+      setUseLagAdjusted(false);
+
+      // Reset server load flag
+      hasLoadedFromServerRef.current = false;
+      lastSavedPositionsRef.current = null;
+
+      // Clear local storage for this app
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(UNIFIED_CACHE_KEY);
+      localStorage.removeItem(FACTOR_CACHE_KEY);
+
+      // Show toast notification
+      showToast({
+        type: 'info',
+        message: 'Signed out successfully. Portfolio reset to defaults.',
+        duration: 4000
+      });
+    }
+
+    // Reset load flag when user logs out (original behavior)
+    if (!isAuthenticated) {
       hasLoadedFromServerRef.current = false;
     }
-  }, [authState.isAuthenticated]);
+  }, [authState.isAuthenticated, showToast]);
 
   // ============================================
   // SUPABASE SYNC - Save positions on change (debounced)
   // ============================================
-  const lastSavedPositionsRef = useRef(null);
-
   useEffect(() => {
     console.log('[App] Position sync effect triggered:', {
       isAuthenticated: authState.isAuthenticated,

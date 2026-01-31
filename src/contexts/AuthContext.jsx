@@ -36,8 +36,12 @@ const AuthContext = createContext(null);
 /**
  * AuthContext Provider component
  * Manages user authentication state and provides login/logout methods
+ * @param {Object} props
+ * @param {React.ReactNode} props.children - Child components
+ * @param {Function} [props.onSignOut] - Callback when user signs out (for resetting app state)
+ * @param {Function} [props.onSignIn] - Callback when user signs in
  */
-export function AuthProvider({ children }) {
+export function AuthProvider({ children, onSignOut, onSignIn }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -74,8 +78,13 @@ export function AuthProvider({ children }) {
 
       if (event === 'SIGNED_IN') {
         console.log('User signed in');
+        if (onSignIn) {
+          onSignIn(session?.user);
+        }
       } else if (event === 'SIGNED_OUT') {
         console.log('User signed out');
+        // Note: onSignOut is called in logout() handler, not here
+        // to avoid double-calling when user explicitly logs out
       } else if (event === 'TOKEN_REFRESHED') {
         console.log('Token refreshed');
       }
@@ -110,10 +119,15 @@ export function AuthProvider({ children }) {
 
     if (result.error) {
       setError(result.error.message);
+    } else {
+      // Call the onSignOut callback to reset app state
+      if (onSignOut) {
+        onSignOut();
+      }
     }
 
     return result;
-  }, []);
+  }, [onSignOut]);
 
   // Memoized context value
   const value = useMemo(() => ({
