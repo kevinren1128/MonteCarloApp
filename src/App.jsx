@@ -2264,6 +2264,17 @@ function MonteCarloSimulator() {
         });
       });
       console.log(`💰 Early price update: ${Object.keys(quickPriceUpdates).length} positions updated`);
+
+      // Also update newData to keep it consistent with positions
+      // This ensures refreshPricesFromUnified doesn't overwrite with stale cached data
+      for (const [ticker, update] of Object.entries(quickPriceUpdates)) {
+        if (newData[ticker]) {
+          newData[ticker].currentPrice = update.currentPrice;
+          newData[ticker].domesticPrice = update.domesticPrice;
+          newData[ticker].currency = update.currency;
+          newData[ticker].exchangeRate = update.exchangeRate;
+        }
+      }
     }
 
     // PHASE 2: Await profiles (should already be done or nearly done)
