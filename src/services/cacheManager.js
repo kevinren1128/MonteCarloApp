@@ -707,7 +707,7 @@ export const loadFromStorageAsync = async () => {
  * Version suffix indicates cache format changes
  * @type {string}
  */
-export const UNIFIED_CACHE_KEY = 'monte-carlo-unified-market-data-v6'; // v6: timestamps for SMB/HML/MOM factor spreads
+export const UNIFIED_CACHE_KEY = 'monte-carlo-unified-market-data-v7'; // v7: includes currency info for cached data
 
 /**
  * Maximum age for unified cache (4 hours in milliseconds)

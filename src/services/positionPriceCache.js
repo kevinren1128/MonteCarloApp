@@ -15,8 +15,8 @@
 import { fetchYahooHistory } from './yahooFinance';
 
 // Cache configuration
-const CACHE_KEY = 'monte-carlo-position-prices-v1';
-const CACHE_VERSION = 1;
+const CACHE_KEY = 'monte-carlo-position-prices-v2'; // v2: currency info support
+const CACHE_VERSION = 2;
 const MAX_HISTORY_DAYS = 756; // ~3 years of trading days (max timeline option in app)
 const MAX_GAP_DAYS = 30; // If gap > 30 days, do full refresh
 const FETCH_DELAY_MS = 100; // Delay between fetches to avoid rate limits
