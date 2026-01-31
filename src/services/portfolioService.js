@@ -233,15 +233,23 @@ export async function savePositions(positions, cashBalance = 0) {
       console.error('[PortfolioService] Cash balance update error:', cashError);
     }
 
-    // Delete existing positions
-    const { error: deleteError } = await supabase
+    // Delete ALL existing positions first (wait for it to complete)
+    console.log('[PortfolioService] Deleting existing positions...');
+    const { data: deletedData, error: deleteError } = await supabase
       .from('positions')
       .delete()
-      .eq('portfolio_id', portfolioId);
+      .eq('portfolio_id', portfolioId)
+      .select();
 
     if (deleteError) {
       console.error('[PortfolioService] Delete positions error:', deleteError);
+      // Continue anyway - might be empty
+    } else {
+      console.log('[PortfolioService] Deleted', deletedData?.length || 0, 'existing positions');
     }
+
+    // Small delay to ensure delete propagates
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     // Insert new positions
     if (positions && positions.length > 0) {
@@ -259,7 +267,7 @@ export async function savePositions(positions, cashBalance = 0) {
         p95: p.p95,
       }));
 
-      console.log('[PortfolioService] Inserting positions:', positionsToInsert);
+      console.log('[PortfolioService] Inserting positions:', positionsToInsert.map(p => p.symbol));
 
       const { data: insertedData, error: insertError } = await supabase
         .from('positions')
