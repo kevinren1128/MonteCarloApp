@@ -6554,35 +6554,35 @@ function MonteCarloSimulator() {
       await new Promise(r => setTimeout(r, 300));
       
       // Step 5: Apply correlation floors (if correlation groups are defined)
-      setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Loading saved correlation groups...' });
+      setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Loading correlation groups...' });
       console.log(`\n${'='.repeat(50)}\n🏗️ FULL LOAD: Step 5/${steps.length} - ${steps[4].name}\n${'='.repeat(50)}`);
 
       // Cloud-forward correlation groups flow:
-      // 1. Load saved groups from Supabase (if authenticated)
-      // 2. Convert ticker-based groups to position-ID format
-      // 3. Identify new tickers not in saved groups
-      // 4. Auto-detect groups for new tickers from positionMetadata
-      // 5. Merge and save updated groups to Supabase
-      // 6. Apply correlation floors
+      // 1. Load saved groups from Supabase (preserves user's edits)
+      // 2. Find NEW tickers not in any saved group
+      // 3. Auto-classify only NEW tickers using metadata (if available)
+      // 4. Merge new classifications with existing groups, save back to Supabase
+      // 5. Apply correlation floors
+      // Note: Full re-detection only happens via "Refresh Sector/Industry Data" button
 
       let groupsToUse = correlationGroups;
       const portfolioTickers = positions.map(p => p.ticker?.toUpperCase()).filter(Boolean);
 
-      // Step 5a: Load saved correlation groups from Supabase if authenticated
+      // Load saved correlation groups from Supabase if authenticated
       if (authState.isAuthenticated) {
         setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Loading saved groups from cloud...' });
         console.log('[LoadAll] Loading saved correlation groups from Supabase...');
 
-        const { groups: savedTickerGroups, tickerToGroup, error } = await loadCorrelationGroupsFromServer();
+        const { groups: savedTickerGroups, error } = await loadCorrelationGroupsFromServer();
 
         if (error) {
           console.warn('[LoadAll] Failed to load correlation groups from Supabase:', error);
         } else if (savedTickerGroups && Object.keys(savedTickerGroups).length > 0) {
           // Convert ticker-based groups to position-ID format
           const savedPosIdGroups = convertGroupsToPositionIds(savedTickerGroups);
-          console.log(`[LoadAll] Loaded ${Object.keys(savedTickerGroups).length} groups from Supabase:`, Object.keys(savedTickerGroups));
+          console.log(`[LoadAll] Loaded ${Object.keys(savedTickerGroups).length} groups from Supabase`);
 
-          // Identify tickers in saved groups
+          // Find tickers already in saved groups
           const savedTickers = new Set();
           for (const tickers of Object.values(savedTickerGroups)) {
             for (const ticker of tickers) {
@@ -6590,88 +6590,67 @@ function MonteCarloSimulator() {
             }
           }
 
-          // Find new tickers not in saved groups
+          // Find NEW tickers not in any saved group
           const newTickers = portfolioTickers.filter(t => !savedTickers.has(t));
 
           if (newTickers.length > 0 && positionMetadata && Object.keys(positionMetadata).length > 0) {
-            console.log(`[LoadAll] Found ${newTickers.length} new tickers not in saved groups:`, newTickers);
-            setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: `Auto-classifying ${newTickers.length} new tickers...` });
+            console.log(`[LoadAll] Found ${newTickers.length} new tickers to classify:`, newTickers);
+            setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: `Classifying ${newTickers.length} new tickers...` });
 
-            // Auto-detect groups for new tickers from positionMetadata
-            const detectedGroups = detectCorrelationGroups(positionMetadata);
+            // Build group assignments for new tickers only (from metadata)
+            const mergedPosIdGroups = { ...savedPosIdGroups };
 
-            if (detectedGroups && Object.keys(detectedGroups).length > 0) {
-              // Merge: start with saved groups, add new ticker assignments
-              const mergedPosIdGroups = { ...savedPosIdGroups };
+            for (const ticker of newTickers) {
+              const meta = positionMetadata[ticker];
+              if (!meta) continue;
 
-              for (const [groupName, posIds] of Object.entries(detectedGroups)) {
-                // Only add positions for new tickers
-                const newPosIds = posIds.filter(posId => {
-                  const pos = positions.find(p => p.id === posId);
-                  return pos && newTickers.includes(pos.ticker?.toUpperCase());
-                });
+              const groupName = meta.industry || meta.sector;
+              if (!groupName || groupName === 'Unknown') continue;
 
-                if (newPosIds.length > 0) {
-                  if (mergedPosIdGroups[groupName]) {
-                    // Add to existing group
-                    mergedPosIdGroups[groupName] = [...new Set([...mergedPosIdGroups[groupName], ...newPosIds])];
-                  } else {
-                    // Create new group
-                    mergedPosIdGroups[groupName] = newPosIds;
-                  }
-                }
+              const pos = positions.find(p => p.ticker?.toUpperCase() === ticker);
+              if (!pos) continue;
+
+              if (!mergedPosIdGroups[groupName]) {
+                mergedPosIdGroups[groupName] = [];
               }
-
-              // Filter out groups with less than 2 members
-              const meaningfulGroups = {};
-              for (const [groupName, posIds] of Object.entries(mergedPosIdGroups)) {
-                if (posIds.length >= 2) {
-                  meaningfulGroups[groupName] = posIds;
-                }
+              if (!mergedPosIdGroups[groupName].includes(pos.id)) {
+                mergedPosIdGroups[groupName].push(pos.id);
               }
+            }
 
-              groupsToUse = meaningfulGroups;
-              setCorrelationGroups(meaningfulGroups);
+            // Filter out groups with less than 2 members
+            const meaningfulGroups = {};
+            for (const [groupName, posIds] of Object.entries(mergedPosIdGroups)) {
+              if (posIds.length >= 2) {
+                meaningfulGroups[groupName] = posIds;
+              }
+            }
 
-              // Save merged groups back to Supabase
+            groupsToUse = meaningfulGroups;
+            setCorrelationGroups(meaningfulGroups);
+
+            // Save merged groups back to Supabase
+            if (Object.keys(meaningfulGroups).length > 0) {
               const tickerGroupsToSave = convertGroupsToTickers(meaningfulGroups);
-              console.log(`[LoadAll] Saving merged groups to Supabase (${Object.keys(tickerGroupsToSave).length} groups)...`);
+              console.log(`[LoadAll] Saving updated groups to Supabase (added ${newTickers.length} new tickers)`);
               await saveCorrelationGroupsToServer(tickerGroupsToSave, 'sector', 'auto');
             }
           } else {
-            // No new tickers, use saved groups as-is
+            // No new tickers or no metadata - use saved groups as-is
             groupsToUse = savedPosIdGroups;
             setCorrelationGroups(savedPosIdGroups);
+            if (newTickers.length > 0) {
+              console.log(`[LoadAll] ${newTickers.length} new tickers without metadata - run "Refresh Sector/Industry Data" to classify`);
+            }
           }
         } else {
-          console.log('[LoadAll] No saved correlation groups found in Supabase');
-        }
-      }
-
-      // Step 5b: If no groups loaded from cloud, fall back to local detection
-      const hasExistingGroups = groupsToUse && Object.values(groupsToUse).some(arr => arr.length > 0);
-
-      if (!hasExistingGroups && positionMetadata && Object.keys(positionMetadata).length > 0) {
-        console.log('[LoadAll] No cloud groups, auto-detecting from cached metadata...');
-        setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Auto-detecting sector/industry groups...' });
-
-        const detectedGroups = detectCorrelationGroups(positionMetadata);
-        if (detectedGroups && Object.keys(detectedGroups).length > 0) {
-          groupsToUse = detectedGroups;
-          console.log(`[LoadAll] Auto-detected ${Object.keys(detectedGroups).length} correlation groups:`, Object.keys(detectedGroups));
-
-          // Save detected groups to Supabase for future sessions
-          if (authState.isAuthenticated) {
-            const tickerGroupsToSave = convertGroupsToTickers(detectedGroups);
-            console.log('[LoadAll] Saving auto-detected groups to Supabase...');
-            await saveCorrelationGroupsToServer(tickerGroupsToSave, 'sector', 'auto');
-          }
+          console.log('[LoadAll] No saved correlation groups in Supabase');
         }
       }
 
       setFullLoadProgress({ step: 5, total: steps.length, phase: steps[4].name, detail: 'Enforcing group correlation minimums...' });
 
-      // Apply correlation floors using the groups (either from cloud, detected, or existing)
+      // Apply correlation floors using the groups
       // Pass finalCorrelation directly to avoid async state race condition
       if (groupsToUse && Object.values(groupsToUse).some(arr => arr.length > 0)) {
         const { adjustments, matrix } = applyCorrelationFloors(0.55, groupsToUse, finalCorrelation);
@@ -6681,7 +6660,7 @@ function MonteCarloSimulator() {
         }
         console.log(`[LoadAll] Applied ${adjustments?.length || 0} correlation floor adjustments from ${Object.keys(groupsToUse).length} groups`);
       } else {
-        console.log('[LoadAll] No correlation groups defined, skipping floor adjustments');
+        console.log('[LoadAll] No correlation groups defined - use Correlation tab to set up groups');
       }
       markTabContentUpdated('correlation');
       await new Promise(r => setTimeout(r, 300));
@@ -7496,7 +7475,14 @@ function MonteCarloSimulator() {
             getDistributionParams={getDistributionParams}
             getCorrelationColor={getCorrelationColor}
             showToast={showToast}
-            
+
+            // Cloud sync
+            isAuthenticated={authState.isAuthenticated}
+            saveCorrelationGroupsToServer={async (groups) => {
+              const tickerGroups = convertGroupsToTickers(groups);
+              return await saveCorrelationGroupsToServer(tickerGroups, 'sector', 'user');
+            }}
+
             // Styles
             styles={styles}
           />

@@ -702,7 +702,11 @@ const CorrelationTab = ({
   getDistributionParams,
   getCorrelationColor,
   showToast,
-  
+
+  // Cloud sync
+  isAuthenticated,
+  saveCorrelationGroupsToServer,
+
   // Styles
   styles,
 }) => {
@@ -2070,17 +2074,17 @@ const CorrelationTab = ({
             </button>
             
             {(Object.keys(positionMetadata).length > 0 || correlationGroups) && (
-              <button 
-                style={styles.button} 
+              <button
+                style={styles.button}
                 onClick={() => {
                   const { adjustments } = applyCorrelationFloors(0.55);
                   setUseLagAdjusted(false);
                   if (adjustments && adjustments.length > 0) {
-                    const summary = adjustments.slice(0, 3).map(a => 
+                    const summary = adjustments.slice(0, 3).map(a =>
                       `${a.ticker1}↔${a.ticker2}: ${(a.from*100).toFixed(0)}%→${(a.to*100).toFixed(0)}%`
                     ).join(', ');
-                    showToast({ 
-                      type: 'success', 
+                    showToast({
+                      type: 'success',
                       title: `Applied ${adjustments.length} Adjustments`,
                       message: summary + (adjustments.length > 3 ? ` ...+${adjustments.length - 3} more` : ''),
                       duration: 6000,
@@ -2091,6 +2095,42 @@ const CorrelationTab = ({
                 }}
               >
                 ⚡ Apply Correlation Floors
+              </button>
+            )}
+
+            {/* Save to Cloud button - only show when authenticated and groups exist */}
+            {isAuthenticated && correlationGroups && Object.keys(correlationGroups).length > 0 && (
+              <button
+                style={{ ...styles.button, ...styles.buttonSecondary }}
+                onClick={async () => {
+                  try {
+                    const { success, error } = await saveCorrelationGroupsToServer(correlationGroups);
+                    if (success) {
+                      showToast({
+                        type: 'success',
+                        title: 'Groups Saved',
+                        message: `Saved ${Object.keys(correlationGroups).length} correlation groups to cloud`,
+                        duration: 3000,
+                      });
+                    } else {
+                      showToast({
+                        type: 'error',
+                        title: 'Save Failed',
+                        message: error?.message || 'Failed to save groups',
+                        duration: 4000,
+                      });
+                    }
+                  } catch (err) {
+                    showToast({
+                      type: 'error',
+                      title: 'Save Failed',
+                      message: err.message || 'Failed to save groups',
+                      duration: 4000,
+                    });
+                  }
+                }}
+              >
+                ☁️ Save Groups to Cloud
               </button>
             )}
           </div>
