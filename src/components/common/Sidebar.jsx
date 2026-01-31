@@ -14,7 +14,8 @@ const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 
 // Width constraints
 const MIN_COLLAPSED_WIDTH = 56;
-const MIN_EXPANDED_WIDTH = 160;
+const COLLAPSE_THRESHOLD = 100; // Auto-collapse when dragged below this
+const MIN_EXPANDED_WIDTH = 120;
 const MAX_EXPANDED_WIDTH = 400;
 const DEFAULT_EXPANDED_WIDTH = 220;
 
@@ -81,11 +82,11 @@ const Sidebar = memo(({
 
   // Handle drag start
   const handleDragStart = useCallback((e) => {
-    if (!isExpanded) return; // Only allow resize when expanded
     e.preventDefault();
     setIsDragging(true);
     dragStartX.current = e.clientX;
-    dragStartWidth.current = expandedWidth;
+    // If collapsed, start from collapsed width
+    dragStartWidth.current = isExpanded ? expandedWidth : MIN_COLLAPSED_WIDTH;
   }, [isExpanded, expandedWidth]);
 
   // Handle drag move
@@ -94,15 +95,28 @@ const Sidebar = memo(({
 
     const handleMouseMove = (e) => {
       const delta = e.clientX - dragStartX.current;
+      const rawWidth = dragStartWidth.current + delta;
+
+      // Allow dragging all the way down to collapsed width
       const newWidth = Math.min(
         MAX_EXPANDED_WIDTH,
-        Math.max(MIN_EXPANDED_WIDTH, dragStartWidth.current + delta)
+        Math.max(MIN_COLLAPSED_WIDTH, rawWidth)
       );
       setExpandedWidth(newWidth);
     };
 
     const handleMouseUp = () => {
       setIsDragging(false);
+
+      // Auto-collapse if dragged below threshold while expanded
+      if (expandedWidth < COLLAPSE_THRESHOLD && isExpanded) {
+        onToggle(); // Collapse the sidebar
+        setExpandedWidth(DEFAULT_EXPANDED_WIDTH); // Reset width for next expand
+      }
+      // Auto-expand if dragged above threshold while collapsed
+      else if (expandedWidth >= COLLAPSE_THRESHOLD && !isExpanded) {
+        onToggle(); // Expand the sidebar
+      }
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -118,9 +132,11 @@ const Sidebar = memo(({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isDragging]);
+  }, [isDragging, expandedWidth, isExpanded, onToggle]);
 
-  const sidebarWidth = isExpanded ? expandedWidth : MIN_COLLAPSED_WIDTH;
+  // During drag, use the current expandedWidth regardless of isExpanded state
+  // This allows the visual feedback while dragging from collapsed state
+  const sidebarWidth = isDragging ? expandedWidth : (isExpanded ? expandedWidth : MIN_COLLAPSED_WIDTH);
 
   const styles = {
     sidebar: {
@@ -306,7 +322,7 @@ const Sidebar = memo(({
     right: 0,
     width: '6px',
     height: '100%',
-    cursor: isExpanded ? 'col-resize' : 'default',
+    cursor: 'col-resize',
     background: isDragging ? 'rgba(0, 212, 255, 0.3)' : 'transparent',
     transition: isDragging ? 'none' : 'background 0.15s ease',
     zIndex: 101,
@@ -314,25 +330,29 @@ const Sidebar = memo(({
 
   return (
     <div style={styles.sidebar}>
-      {/* Resize Handle */}
-      {isExpanded && (
-        <div
-          style={resizeHandleStyle}
-          onMouseDown={handleDragStart}
-          onDoubleClick={() => setExpandedWidth(DEFAULT_EXPANDED_WIDTH)}
-          onMouseEnter={(e) => {
-            if (!isDragging) {
-              e.currentTarget.style.background = 'rgba(0, 212, 255, 0.15)';
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!isDragging) {
-              e.currentTarget.style.background = 'transparent';
-            }
-          }}
-          title="Drag to resize (double-click to reset)"
-        />
-      )}
+      {/* Resize Handle - available in both expanded and collapsed states */}
+      <div
+        style={resizeHandleStyle}
+        onMouseDown={handleDragStart}
+        onDoubleClick={() => {
+          if (isExpanded) {
+            setExpandedWidth(DEFAULT_EXPANDED_WIDTH);
+          } else {
+            onToggle(); // Expand on double-click when collapsed
+          }
+        }}
+        onMouseEnter={(e) => {
+          if (!isDragging) {
+            e.currentTarget.style.background = 'rgba(0, 212, 255, 0.15)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isDragging) {
+            e.currentTarget.style.background = 'transparent';
+          }
+        }}
+        title={isExpanded ? "Drag to resize (double-click to reset)" : "Drag to expand"}
+      />
       {/* Header with logo and portfolio value */}
       <div style={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
@@ -340,12 +360,6 @@ const Sidebar = memo(({
             <span style={styles.logoIcon}>📈</span>
             <span style={styles.logoText}>factorsim.xyz</span>
           </div>
-          {/* Autosave indicator - in header for visibility */}
-          {AutosaveIndicator && (
-            <div style={{ flexShrink: 0, position: 'absolute', right: isExpanded ? '12px' : '8px' }}>
-              <AutosaveIndicator status={autosaveStatus} compact={true} />
-            </div>
-          )}
         </div>
 
         {/* Portfolio Value - Expanded */}
@@ -488,16 +502,24 @@ const Sidebar = memo(({
         })}
       </nav>
 
-      {/* User Account Section */}
-      {UserMenu && (
+      {/* User Account Section with Autosave Indicator */}
+      {(UserMenu || AutosaveIndicator) && (
         <div style={{
           padding: '12px 8px',
           borderTop: '1px solid rgba(42, 42, 74, 0.4)',
           display: 'flex',
-          justifyContent: isExpanded ? 'flex-start' : 'center',
+          alignItems: 'center',
+          justifyContent: isExpanded ? 'space-between' : 'center',
+          gap: '8px',
           flexShrink: 0,
         }}>
-          <UserMenu syncState={syncState} />
+          {UserMenu && <UserMenu syncState={syncState} />}
+          {/* Autosave indicator - right justified next to user avatar */}
+          {AutosaveIndicator && isExpanded && (
+            <div style={{ flexShrink: 0, marginLeft: 'auto' }}>
+              <AutosaveIndicator status={autosaveStatus} compact={true} />
+            </div>
+          )}
         </div>
       )}
 
