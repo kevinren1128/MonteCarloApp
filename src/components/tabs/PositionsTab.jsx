@@ -113,16 +113,27 @@ const PositionsTab = memo(({
   
   // Store the last stable sort order
   const lastSortedRef = useRef([]);
-  
+  // Track last sort settings to detect when user clicks a sort header
+  const lastSortSettingsRef = useRef({ column: positionSort.column, direction: positionSort.direction });
+
   // Sort positions - but don't resort while actively editing
   const sortedPositions = useMemo(() => {
     // Detect if there's a brand new position (not in our last sorted list)
     const lastIds = new Set(lastSortedRef.current.map(p => p.id));
     const brandNewPositions = filteredPositions.filter(p => !lastIds.has(p.id));
     const hasBrandNewPosition = brandNewPositions.length > 0;
-    
+
+    // Check if sort settings changed (user clicked a column header)
+    const sortSettingsChanged =
+      lastSortSettingsRef.current.column !== positionSort.column ||
+      lastSortSettingsRef.current.direction !== positionSort.direction;
+
+    // Update the ref for next comparison
+    lastSortSettingsRef.current = { column: positionSort.column, direction: positionSort.direction };
+
     // If actively editing OR there's a brand new position, keep the list stable
-    if ((editingPositionId !== null || hasBrandNewPosition) && lastSortedRef.current.length > 0) {
+    // BUT always sort if the user explicitly clicked a sort header
+    if (!sortSettingsChanged && (editingPositionId !== null || hasBrandNewPosition) && lastSortedRef.current.length > 0) {
       // Filter the last sorted list to only include positions that still exist
       const existingIds = new Set(filteredPositions.map(p => p.id));
       const filtered = lastSortedRef.current.filter(p => existingIds.has(p.id));
