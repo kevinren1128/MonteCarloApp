@@ -3895,73 +3895,9 @@ function MonteCarloSimulator() {
       return;
     }
 
-    // Check if we can use Worker correlation (simple Pearson, no EWMA/shrinkage)
-    // Worker correlation is usable when:
-    // - Worker correlation exists
-    // - useEwma is false (Worker uses equal-weight correlation)
-    // - correlationMethod is 'sample' (Worker doesn't apply shrinkage)
-    // - gldAsCash is false (Worker doesn't zero out GLD correlations)
-    // - Worker symbols match current tickers (unique comparison - portfolio may have duplicates)
-    const uniqueTickers = [...new Set(tickers.map(t => t.toUpperCase()))];
-    const canUseWorkerCorrelation = workerCorrelation?.matrix &&
-      !useEwma &&
-      correlationMethod === 'sample' &&
-      !gldAsCash &&
-      workerCorrelation.symbols?.length === uniqueTickers.length &&
-      uniqueTickers.every(t => workerCorrelation.symbols.includes(t));
-
-    // Debug: log why Worker correlation can/cannot be used
-    if (!canUseWorkerCorrelation && workerCorrelation?.matrix) {
-      const reasons = [];
-      if (useEwma) reasons.push('EWMA enabled');
-      if (correlationMethod !== 'sample') reasons.push(`method=${correlationMethod}`);
-      if (gldAsCash) reasons.push('GLD-as-cash enabled');
-      if (workerCorrelation.symbols?.length !== uniqueTickers.length) {
-        reasons.push(`symbol count mismatch: Worker=${workerCorrelation.symbols?.length}, portfolio=${uniqueTickers.length}`);
-      }
-      if (!uniqueTickers.every(t => workerCorrelation.symbols?.includes(t))) {
-        const missing = uniqueTickers.filter(t => !workerCorrelation.symbols?.includes(t));
-        reasons.push(`missing symbols: ${missing.join(', ')}`);
-      }
-      console.log(`📊 Worker correlation available but not used: ${reasons.join(', ')}`);
-    } else if (!workerCorrelation?.matrix) {
-      console.log(`📊 No Worker correlation cached (run Load All first)`);
-    }
-
-    if (canUseWorkerCorrelation) {
-      console.log(`⚡ Using Worker-cached correlation matrix (${workerCorrelation.symbols.length}x${workerCorrelation.symbols.length}, portfolio has ${tickers.length} positions)`);
-
-      // Reorder Worker matrix to match current ticker order (handles duplicates - same ticker maps to same row)
-      const workerSymbols = workerCorrelation.symbols;
-      const reorderedMatrix = tickers.map((tickerI) => {
-        const iWorker = workerSymbols.indexOf(tickerI.toUpperCase());
-        return tickers.map((tickerJ) => {
-          const jWorker = workerSymbols.indexOf(tickerJ.toUpperCase());
-          return workerCorrelation.matrix[iWorker][jWorker];
-        });
-      });
-
-      setCorrelationMatrix(reorderedMatrix);
-      setEditedCorrelation(reorderedMatrix.map(row => [...row]));
-      setDataSource('worker');
-      setIsFetchingData(false);
-
-      // Clear stale indicator - correlation is now fresh
-      clearStaleTab('correlation');
-
-      showToast({
-        type: 'success',
-        title: 'Correlation from Cache',
-        message: `${reorderedMatrix.length}×${reorderedMatrix.length} matrix from Worker (cached)`,
-        duration: 3500,
-      });
-
-      return reorderedMatrix;
-    }
-
     console.log(`📊 Computing ${historyTimeline} correlation for ${tickers.length} tickers...`);
-    
-    // Build historical data structure from unified data
+
+    // Build historical data structure from unified data FIRST (needed for overlap display, lag analysis, etc.)
     const newHistoricalData = {};
     const errors = [];
     let usedYahoo = false;
@@ -4044,7 +3980,71 @@ function MonteCarloSimulator() {
       const isLimited = length < targetDays;
       console.log(`   ${ticker}: ${length} days (~${years}yr)${isLimited ? ` (limited, wanted ${targetDays})` : ''}`);
     });
-    
+
+    // ==================== CHECK WORKER CORRELATION ====================
+    // Worker correlation is usable when:
+    // - Worker correlation exists
+    // - useEwma is false (Worker uses equal-weight correlation)
+    // - correlationMethod is 'sample' (Worker doesn't apply shrinkage)
+    // - gldAsCash is false (Worker doesn't zero out GLD correlations)
+    // - Worker symbols match current tickers (unique comparison - portfolio may have duplicates)
+    const uniqueTickers = [...new Set(tickers.map(t => t.toUpperCase()))];
+    const canUseWorkerCorrelation = workerCorrelation?.matrix &&
+      !useEwma &&
+      correlationMethod === 'sample' &&
+      !gldAsCash &&
+      workerCorrelation.symbols?.length === uniqueTickers.length &&
+      uniqueTickers.every(t => workerCorrelation.symbols.includes(t));
+
+    // Debug: log why Worker correlation can/cannot be used
+    if (!canUseWorkerCorrelation && workerCorrelation?.matrix) {
+      const reasons = [];
+      if (useEwma) reasons.push('EWMA enabled');
+      if (correlationMethod !== 'sample') reasons.push(`method=${correlationMethod}`);
+      if (gldAsCash) reasons.push('GLD-as-cash enabled');
+      if (workerCorrelation.symbols?.length !== uniqueTickers.length) {
+        reasons.push(`symbol count mismatch: Worker=${workerCorrelation.symbols?.length}, portfolio=${uniqueTickers.length}`);
+      }
+      if (!uniqueTickers.every(t => workerCorrelation.symbols?.includes(t))) {
+        const missing = uniqueTickers.filter(t => !workerCorrelation.symbols?.includes(t));
+        reasons.push(`missing symbols: ${missing.join(', ')}`);
+      }
+      console.log(`📊 Worker correlation available but not used: ${reasons.join(', ')}`);
+    } else if (!workerCorrelation?.matrix) {
+      console.log(`📊 No Worker correlation cached (run Load All first)`);
+    }
+
+    if (canUseWorkerCorrelation) {
+      console.log(`⚡ Using Worker-cached correlation matrix (${workerCorrelation.symbols.length}x${workerCorrelation.symbols.length}, portfolio has ${tickers.length} positions)`);
+
+      // Reorder Worker matrix to match current ticker order (handles duplicates - same ticker maps to same row)
+      const workerSymbols = workerCorrelation.symbols;
+      const reorderedMatrix = tickers.map((tickerI) => {
+        const iWorker = workerSymbols.indexOf(tickerI.toUpperCase());
+        return tickers.map((tickerJ) => {
+          const jWorker = workerSymbols.indexOf(tickerJ.toUpperCase());
+          return workerCorrelation.matrix[iWorker][jWorker];
+        });
+      });
+
+      setCorrelationMatrix(reorderedMatrix);
+      setEditedCorrelation(reorderedMatrix.map(row => [...row]));
+      setDataSource('worker');
+      setIsFetchingData(false);
+
+      // Clear stale indicator - correlation is now fresh
+      clearStaleTab('correlation');
+
+      showToast({
+        type: 'success',
+        title: 'Correlation from Cache',
+        message: `${reorderedMatrix.length}×${reorderedMatrix.length} matrix from Worker (cached)`,
+        duration: 3500,
+      });
+
+      return reorderedMatrix;
+    }
+
     // ==================== PAIRWISE CORRELATION WITH MAXIMUM OVERLAP ====================
     // For each pair of tickers, use as much overlapping data as available
     // This means AAPL-SPY can use 504 days even if KDEF only has 241 days
