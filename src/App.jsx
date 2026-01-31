@@ -37,7 +37,7 @@ import { styles } from './styles/appStyles';
 import { fetchYahooQuote, fetchYahooHistory, fetchYahooProfile, fetchExchangeRate, fetchYahooData } from './services/yahooFinance';
 
 // Market data service - derived metrics from Cloudflare Worker
-import { fetchAllDerivedMetrics, isWorkerAvailable } from './services/marketService';
+import { fetchMetrics, fetchAllDerivedMetrics, isWorkerAvailable } from './services/marketService';
 
 // Position price cache for persistent storage
 import {
@@ -2007,6 +2007,48 @@ function MonteCarloSimulator() {
     setUnifiedFetchProgress({ current: 0, total: allTickers.length, message: 'Initializing...' });
 
     console.log(`🚀 Fetching unified data for ${allTickers.length} tickers (${tickers.length} positions + ${factorETFs.length} factor ETFs)...`);
+
+    // ============================================
+    // PHASE 0: FAST METRICS FETCH (Positions tab renders immediately)
+    // ============================================
+    // Fetch pre-computed metrics from Worker for position tickers only
+    // This allows Positions tab to render while we fetch history for other tabs
+    if (isWorkerAvailable() && tickers.length > 0) {
+      setUnifiedFetchProgress({ current: 0, total: allTickers.length, message: 'Fetching metrics...' });
+      try {
+        const metricsStartTime = performance.now();
+        const metrics = await fetchMetrics(tickers);
+
+        if (metrics && Object.keys(metrics).length > 0) {
+          console.log(`⚡ Metrics fetched in ${(performance.now() - metricsStartTime).toFixed(0)}ms for ${Object.keys(metrics).length} tickers`);
+
+          // Set positionBetas immediately so Positions tab can render
+          setPositionBetas(metrics);
+
+          // Update position prices from latestPrice
+          const priceUpdates = {};
+          for (const [symbol, data] of Object.entries(metrics)) {
+            if (data.latestPrice != null) {
+              priceUpdates[symbol] = data.latestPrice;
+            }
+          }
+
+          if (Object.keys(priceUpdates).length > 0) {
+            setPositions(prev => prev.map(p => {
+              const newPrice = priceUpdates[p.ticker?.toUpperCase()];
+              if (newPrice != null && newPrice !== p.price) {
+                return { ...p, price: newPrice };
+              }
+              return p;
+            }));
+            console.log(`💰 Updated prices for ${Object.keys(priceUpdates).length} positions from metrics`);
+          }
+        }
+      } catch (err) {
+        console.warn('[Metrics] Failed to fetch fast metrics, will compute locally:', err.message);
+      }
+    }
+    // ============================================
 
     // Load persistent position price cache with fast parallel fetching
     // If cache exists, this only fetches new days (incremental) or new tickers

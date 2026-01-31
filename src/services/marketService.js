@@ -334,6 +334,67 @@ export async function getWorkerStatus() {
 // ============================================
 
 /**
+ * Fetch unified metrics for Positions tab (beta, vol, returns, sparkline)
+ * This is the PRIMARY endpoint for fast Positions tab loading.
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @param {string} benchmark - Benchmark symbol (default: SPY)
+ * @returns {Promise<Object|null>} Map of symbol -> metrics (UI-ready shape) or null if failed
+ */
+export async function fetchMetrics(symbols, benchmark = 'SPY') {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping metrics fetch');
+    return null;
+  }
+
+  if (symbols.length === 0) {
+    return {};
+  }
+
+  const data = await fetchFromWorker('/api/metrics', {
+    symbols: symbols.join(','),
+    benchmark,
+  });
+
+  if (!data) {
+    return null;
+  }
+
+  // Map API response to UI-expected shape
+  const mapped = {};
+  for (const [symbol, metrics] of Object.entries(data)) {
+    if (metrics.error) {
+      // Skip symbols with errors
+      console.warn(`[MarketService] Metrics error for ${symbol}:`, metrics.error);
+      continue;
+    }
+
+    mapped[symbol] = {
+      // Core metrics (match positionBetas shape)
+      beta: metrics.beta,
+      correlation: metrics.correlation,
+      volatility: metrics.volatility,        // Already percentage from Worker
+      ytdReturn: metrics.ytdReturn,
+      oneYearReturn: metrics.oneYearReturn,
+      thirtyDayReturn: metrics.thirtyDayReturn,
+      sparklineData: metrics.sparkline,      // Rename: sparkline → sparklineData
+      // International stock handling
+      betaLag: metrics.betaLag,
+      isInternational: metrics.isInternational,
+      // Extra fields for position updates
+      latestPrice: metrics.latestPrice,
+      currency: metrics.currency,
+      // Metadata
+      asOf: metrics.asOf,
+      cached: metrics.cached || false,
+    };
+  }
+
+  console.log(`[MarketService] Fetched metrics for ${Object.keys(mapped).length} symbols from Worker`);
+  return mapped;
+}
+
+/**
  * Fetch pre-computed beta values from Worker
  *
  * @param {string[]} symbols - Array of ticker symbols
@@ -627,6 +688,7 @@ export default {
   fetchConsensus,
   getWorkerStatus,
   // Derived metrics
+  fetchMetrics,  // Unified metrics for Positions tab
   fetchBetas,
   fetchVolatility,
   fetchDistributions,
