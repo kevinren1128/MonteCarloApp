@@ -12,15 +12,24 @@
  */
 
 // CORS proxy configuration - multiple fallbacks for reliability
+// Updated 2025: Using more reliable proxies
 const CORS_PROXIES = [
   {
-    name: 'corsproxy-org',
-    buildUrl: (url) => `https://corsproxy.org/?${encodeURIComponent(url)}`,
+    name: 'corsproxy-io',
+    buildUrl: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     parseResponse: async (response) => response.json(),
   },
   {
-    name: 'thingproxy',
-    buildUrl: (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+    name: 'cors-proxy-htmldriven',
+    buildUrl: (url) => `https://cors-proxy.htmldriven.com/?url=${encodeURIComponent(url)}`,
+    parseResponse: async (response) => {
+      const data = await response.json();
+      return data.body ? JSON.parse(data.body) : null;
+    },
+  },
+  {
+    name: 'api-codetabs',
+    buildUrl: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
     parseResponse: async (response) => response.json(),
   },
   {
@@ -38,16 +47,43 @@ const CORS_PROXIES = [
   },
 ];
 
+// Track proxy success rates to prefer working proxies
+const proxyStats = CORS_PROXIES.reduce((acc, p) => {
+  acc[p.name] = { successes: 0, failures: 0 };
+  return acc;
+}, {});
+
+// Get proxies sorted by success rate (most reliable first)
+const getSortedProxies = () => {
+  return [...CORS_PROXIES].sort((a, b) => {
+    const aStats = proxyStats[a.name];
+    const bStats = proxyStats[b.name];
+    const aTotal = aStats.successes + aStats.failures;
+    const bTotal = bStats.successes + bStats.failures;
+
+    // If no data, keep original order
+    if (aTotal === 0 && bTotal === 0) return 0;
+    if (aTotal === 0) return 1;
+    if (bTotal === 0) return -1;
+
+    const aRate = aStats.successes / aTotal;
+    const bRate = bStats.successes / bTotal;
+    return bRate - aRate;
+  });
+};
+
 /**
  * Fetch data from Yahoo Finance with CORS proxy fallback
- * Tries proxies sequentially to avoid rate limiting (429 errors)
+ * Tries proxies sequentially, preferring ones with better success rates
  * @param {string} url - Yahoo Finance API URL
- * @param {number} timeout - Timeout in ms per proxy (default: 8000)
+ * @param {number} timeout - Timeout in ms per proxy (default: 10000)
  * @returns {Promise<Object|null>} Parsed JSON response or null on failure
  */
-export const fetchYahooData = async (url, timeout = 8000) => {
-  // Try each proxy sequentially (not racing) to avoid rate limiting
-  for (const proxy of CORS_PROXIES) {
+export const fetchYahooData = async (url, timeout = 10000) => {
+  // Try each proxy sequentially, sorted by success rate
+  const sortedProxies = getSortedProxies();
+
+  for (const proxy of sortedProxies) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -58,12 +94,18 @@ export const fetchYahooData = async (url, timeout = 8000) => {
 
       if (response.ok) {
         const data = await proxy.parseResponse(response);
-        if (data) return data;
+        if (data) {
+          // Track success
+          proxyStats[proxy.name].successes++;
+          return data;
+        }
       }
-      // Response not ok, try next proxy
+      // Response not ok, track failure and try next proxy
+      proxyStats[proxy.name].failures++;
     } catch (e) {
       clearTimeout(timeoutId);
-      // Request failed, try next proxy
+      // Request failed, track and try next proxy
+      proxyStats[proxy.name].failures++;
     }
   }
 
@@ -79,16 +121,23 @@ export const fetchYahooData = async (url, timeout = 8000) => {
  * @returns {Promise<Object|null>}
  */
 export const fetchYahooDataFastest = async (url) => {
-  const promises = CORS_PROXIES.map(async (proxy) => {
+  const sortedProxies = getSortedProxies();
+
+  const promises = sortedProxies.map(async (proxy) => {
     try {
       const proxyUrl = proxy.buildUrl(url);
       const response = await fetch(proxyUrl);
       if (response.ok) {
         const data = await proxy.parseResponse(response);
-        if (data) return data;
+        if (data) {
+          proxyStats[proxy.name].successes++;
+          return data;
+        }
       }
+      proxyStats[proxy.name].failures++;
       throw new Error('Invalid response');
     } catch (e) {
+      proxyStats[proxy.name].failures++;
       throw e;
     }
   });
