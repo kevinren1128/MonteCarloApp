@@ -1400,26 +1400,37 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       })),
 
       // Forward estimates from analysts (sorted nearest future first, converted to USD)
-      forward: (estimates?.forwardEstimates || []).map(f => ({
-        ...f,
-        revenue: toUSD(f.revenue),
-        grossProfit: toUSD(f.grossProfit),
-        ebit: toUSD(f.ebit),
-        ebitda: toUSD(f.ebitda),
-        netIncome: toUSD(f.netIncome),
-        eps: toUSD(f.eps),
-      })),
+      // Calculate grossProfit from revenue × historical margin if not available from API
+      forward: (estimates?.forwardEstimates || []).map(f => {
+        const revenue = toUSD(f.revenue);
+        const grossProfit = toUSD(f.grossProfit) || (revenue ? revenue * historicalGrossMargin : null);
+        return {
+          ...f,
+          revenue,
+          grossProfit,
+          grossMargin: revenue && grossProfit ? grossProfit / revenue : f.grossMargin,
+          ebit: toUSD(f.ebit),
+          ebitda: toUSD(f.ebitda),
+          netIncome: toUSD(f.netIncome),
+          eps: toUSD(f.eps),
+        };
+      }),
 
       // FY3 estimate if available (converted to USD)
-      fy3: estimates?.fy3 ? {
-        ...estimates.fy3,
-        revenue: toUSD(estimates.fy3.revenue),
-        grossProfit: toUSD(estimates.fy3.grossProfit),
-        ebit: toUSD(estimates.fy3.ebit),
-        ebitda: toUSD(estimates.fy3.ebitda),
-        netIncome: toUSD(estimates.fy3.netIncome),
-        eps: toUSD(estimates.fy3.eps),
-      } : null,
+      fy3: estimates?.fy3 ? (() => {
+        const revenue = toUSD(estimates.fy3.revenue);
+        const grossProfit = toUSD(estimates.fy3.grossProfit) || (revenue ? revenue * historicalGrossMargin : null);
+        return {
+          ...estimates.fy3,
+          revenue,
+          grossProfit,
+          grossMargin: revenue && grossProfit ? grossProfit / revenue : estimates.fy3?.grossMargin,
+          ebit: toUSD(estimates.fy3.ebit),
+          ebitda: toUSD(estimates.fy3.ebitda),
+          netIncome: toUSD(estimates.fy3.netIncome),
+          eps: toUSD(estimates.fy3.eps),
+        };
+      })() : null,
     },
   };
 };
