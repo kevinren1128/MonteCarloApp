@@ -1175,12 +1175,9 @@ function MonteCarloSimulator() {
       optimize: true,
     });
 
-    // Cancel any running simulations (they're now invalid)
-    if (isSimulating && cancelSimulation) {
-      console.log('[Stale] Cancelling running simulation');
-      cancelSimulation();
-    }
-  }, [positions, isSimulating, cancelSimulation]);
+    // Note: Running simulations will complete but their results will be marked stale
+    // TODO: Add cancelSimulation to useSimulation hook for immediate cancellation
+  }, [positions]);
 
   // Helper to clear stale status for a tab
   const clearStaleTab = useCallback((tabId) => {
