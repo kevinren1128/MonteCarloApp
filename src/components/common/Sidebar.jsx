@@ -183,7 +183,7 @@ const Sidebar = memo(({
   const isMedium = sidebarMode === 'medium';
   const isWide = sidebarMode === 'wide';
   const showLabels = !isNarrow; // Show labels in medium and wide
-  const showShortcuts = isWide; // Only show shortcuts in wide mode
+  const showShortcuts = showLabels; // Show shortcuts in medium and wide (we have space)
 
   const styles = {
     sidebar: {
@@ -419,41 +419,45 @@ const Sidebar = memo(({
     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
   };
 
-  // Three-dot zone indicator
+  // Three-dot zone indicator - rendered in-flow below nav, above user section
   const ZoneIndicator = () => (
     <div style={{
-      position: 'absolute',
-      top: '12px',
-      right: '12px',
       display: 'flex',
-      gap: '6px',
-      padding: '6px 10px',
-      background: 'rgba(0, 0, 0, 0.6)',
-      borderRadius: '12px',
-      border: '1px solid rgba(255, 255, 255, 0.1)',
-      zIndex: 103,
+      justifyContent: 'center',
+      padding: '8px 0',
       pointerEvents: 'none',
       opacity: isDragging ? 1 : 0,
-      transition: 'opacity 0.15s ease',
+      maxHeight: isDragging ? '40px' : '0',
+      overflow: 'hidden',
+      transition: 'opacity 0.15s ease, max-height 0.15s ease',
     }}>
-      {['narrow', 'medium', 'wide'].map((mode) => (
-        <div
-          key={mode}
-          style={{
-            width: '8px',
-            height: '8px',
-            borderRadius: '50%',
-            background: nearestSnap === mode
-              ? 'linear-gradient(135deg, #00d4ff, #7b2ff7)'
-              : 'rgba(255, 255, 255, 0.2)',
-            boxShadow: nearestSnap === mode
-              ? '0 0 8px rgba(0, 212, 255, 0.5)'
-              : 'none',
-            transition: 'all 0.15s ease',
-          }}
-          title={mode.charAt(0).toUpperCase() + mode.slice(1)}
-        />
-      ))}
+      <div style={{
+        display: 'flex',
+        gap: '6px',
+        padding: '6px 10px',
+        background: 'rgba(0, 0, 0, 0.6)',
+        borderRadius: '12px',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+      }}>
+        {['narrow', 'medium', 'wide'].map((mode) => (
+          <div
+            key={mode}
+            style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              background: nearestSnap === mode
+                ? 'linear-gradient(135deg, #00d4ff, #7b2ff7)'
+                : 'rgba(255, 255, 255, 0.2)',
+              boxShadow: nearestSnap === mode
+                ? '0 0 8px rgba(0, 212, 255, 0.5)'
+                : 'none',
+              transition: 'all 0.15s ease',
+            }}
+            title={mode.charAt(0).toUpperCase() + mode.slice(1)}
+          />
+        ))}
+      </div>
     </div>
   );
 
@@ -466,9 +470,6 @@ const Sidebar = memo(({
       <div style={floatingLabelStyle}>
         {snapLabels[nearestSnap]}
       </div>
-
-      {/* Three-dot zone indicator */}
-      <ZoneIndicator />
 
       {/* Resize Handle - available in all modes */}
       <div
@@ -642,17 +643,28 @@ const Sidebar = memo(({
         })}
       </nav>
 
+      {/* Three-dot zone indicator - shown while dragging, centered below tabs */}
+      <ZoneIndicator />
+
       {/* User Account Section with Autosave Indicator */}
       {(UserMenu || AutosaveIndicator) && (
         <div style={{
           padding: '12px 8px',
           borderTop: '1px solid rgba(42, 42, 74, 0.4)',
           display: 'flex',
+          flexDirection: isNarrow ? 'column' : 'row',
           alignItems: 'center',
-          justifyContent: showLabels ? 'space-between' : 'center',
-          gap: '8px',
+          justifyContent: isNarrow ? 'center' : (showLabels ? 'space-between' : 'center'),
+          gap: isNarrow ? '6px' : '8px',
           flexShrink: 0,
         }}>
+          {/* In narrow mode: autosave indicator above, then user avatar centered */}
+          {/* In wide mode: user avatar left, autosave indicator right */}
+          {isNarrow && AutosaveIndicator && (
+            <div style={{ flexShrink: 0 }}>
+              <AutosaveIndicator status={autosaveStatus} compact={true} />
+            </div>
+          )}
           {UserMenu && <UserMenu syncState={syncState} />}
           {/* Autosave indicator - right justified next to user avatar (only in wide mode) */}
           {AutosaveIndicator && isWide && (
