@@ -1003,6 +1003,33 @@ export const fetchBalanceSheet = async (ticker, apiKey) => {
 
 /**
  * Fetch all consensus data for a single ticker (enhanced with 13 API calls)
+ *
+ * CURRENCY HANDLING RULES:
+ * ========================
+ * For international stocks and ADRs, data comes in different currencies:
+ *
+ * 1. TRADING CURRENCY (e.g., USD for NYSE-listed ADRs):
+ *    - Quote data: price, marketCap
+ *    - Price targets from analysts (they target the traded instrument)
+ *    → Do NOT convert these
+ *
+ * 2. REPORTING CURRENCY (e.g., TWD for Taiwan companies):
+ *    - Income statement: revenue, grossProfit, netIncome, eps
+ *    - Balance sheet: totalDebt, cash, totalAssets
+ *    - Cash flow: freeCashFlow, operatingCashFlow
+ *    - Analyst estimates: revenue, eps, ebitda forecasts
+ *    → MUST convert to USD using exchange rate
+ *
+ * 3. RATIOS (unitless, no conversion needed):
+ *    - Margins: grossMargin, netMargin, operatingMargin
+ *    - Returns: ROE, ROA, ROIC
+ *    - Valuation ratios from API: P/E, P/B, EV/EBITDA (already calculated by FMP)
+ *
+ * 4. CALCULATED MULTIPLES:
+ *    - When we calculate ratios like P/E = price / eps:
+ *      - price is in trading currency (USD)
+ *      - eps must be converted to USD first
+ *    - Result is a unitless ratio
  */
 export const fetchConsensusData = async (ticker, apiKey) => {
   // Fetch all data in parallel (13 API calls per ticker)
@@ -1282,14 +1309,17 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       receivablesTurnover: ratios?.receivablesTurnover,
     },
 
-    // Analyst price targets (converted to USD)
+    // Analyst price targets - these are in TRADING currency (USD for ADRs), NOT reporting currency
+    // So we should NOT convert them
     priceTargets: priceTargets ? {
-      high: toUSD(priceTargets.targetHigh),
-      low: toUSD(priceTargets.targetLow),
-      consensus: toUSD(priceTargets.targetConsensus),
-      median: toUSD(priceTargets.targetMedian),
-      // Upside calculated from already-converted price and target
-      upside: price ? (toUSD(priceTargets.targetConsensus) - price) / price : null,
+      high: priceTargets.targetHigh,
+      low: priceTargets.targetLow,
+      consensus: priceTargets.targetConsensus,
+      median: priceTargets.targetMedian,
+      // Upside: both price and target are in trading currency (no conversion needed)
+      upside: price && priceTargets.targetConsensus
+        ? (priceTargets.targetConsensus - price) / price
+        : null,
     } : null,
 
     // Analyst ratings (buy/hold/sell)
