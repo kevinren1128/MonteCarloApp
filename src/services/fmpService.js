@@ -151,7 +151,46 @@ const fetchExchangeRate = async (fromCurrency, apiKey) => {
       return rate;
     }
 
-    console.warn(`[FMP] Could not fetch exchange rate for ${fromCurrency}`);
+    // Fallback 2: try v3 forex endpoint
+    const v3Url = `https://financialmodelingprep.com/api/v3/fx/${pair}?apikey=${apiKey}`;
+    const v3Response = await fetch(v3Url);
+    if (v3Response.ok) {
+      const v3Data = await v3Response.json();
+      if (v3Data && v3Data[0]?.bid) {
+        const rate = v3Data[0].bid;
+        exchangeRateCache[cacheKey] = rate;
+        console.log(`[FMP] Exchange rate (v3) ${fromCurrency} -> USD:`, rate);
+        return rate;
+      }
+    }
+
+    console.warn(`[FMP] Could not fetch exchange rate for ${fromCurrency}, using fallback`);
+    // Use hardcoded fallback rates for common currencies
+    const fallbackRates = {
+      'TWD': 0.031,  // Taiwan Dollar
+      'EUR': 1.08,   // Euro
+      'GBP': 1.27,   // British Pound
+      'JPY': 0.0067, // Japanese Yen
+      'KRW': 0.00074, // Korean Won
+      'CNY': 0.14,   // Chinese Yuan
+      'HKD': 0.128,  // Hong Kong Dollar
+      'CHF': 1.13,   // Swiss Franc
+      'AUD': 0.65,   // Australian Dollar
+      'CAD': 0.74,   // Canadian Dollar
+      'SEK': 0.095,  // Swedish Krona
+      'DKK': 0.145,  // Danish Krone
+      'NOK': 0.091,  // Norwegian Krone
+      'INR': 0.012,  // Indian Rupee
+      'BRL': 0.17,   // Brazilian Real
+    };
+
+    if (fallbackRates[fromCurrency]) {
+      const rate = fallbackRates[fromCurrency];
+      exchangeRateCache[cacheKey] = rate;
+      console.log(`[FMP] Using fallback exchange rate for ${fromCurrency}:`, rate);
+      return rate;
+    }
+
     return 1; // Default to 1 if we can't get the rate
   } catch (err) {
     console.warn(`[FMP] Exchange rate fetch failed for ${fromCurrency}:`, err);
@@ -1005,14 +1044,20 @@ export const fetchConsensusData = async (ticker, apiKey) => {
     console.log(`[FMP] ${ticker}: Trading in ${tradingCurrency}, Reporting in ${reportingCurrency}, FX rate: ${exchangeRate}`);
   }
 
-  // Calculate forward metrics (convert to USD)
-  const price = toUSD(quote?.price) || 0;
-  const marketCap = toUSD(quote?.marketCap || ev?.marketCap) || 0;
+  // IMPORTANT: For ADRs, quote data (price, marketCap) is in TRADING currency (usually USD)
+  // But financial statements (income, balance sheet) are in REPORTING currency (e.g., TWD for TSM)
+  // So we should NOT convert quote data, only financial statement data
 
-  // Get debt and cash from balance sheet (more reliable than enterprise-values endpoint)
-  // Balance sheet data is in reporting currency, need to convert to USD
+  // Quote data - already in trading currency (USD for ADRs)
+  const price = quote?.price || 0;
+  const marketCap = quote?.marketCap || 0;
+
+  // Get debt and cash from balance sheet (in REPORTING currency, need to convert to USD)
   const totalDebt = toUSD(balanceSheet?.totalDebt) || toUSD(ev?.totalDebt) || 0;
   const cash = toUSD(balanceSheet?.cashAndCashEquivalents) || toUSD(ev?.cashAndEquivalents) || 0;
+
+  console.log(`[FMP] ${ticker}: Quote currency=${tradingCurrency}, Reporting currency=${reportingCurrency}, FX=${exchangeRate}`);
+  console.log(`[FMP] ${ticker}: Raw balanceSheet debt=${balanceSheet?.totalDebt}, cash=${balanceSheet?.cashAndCashEquivalents}`);
 
   // Calculate net debt directly from balance sheet: Total Debt - Cash
   // This is more reliable than EV - Market Cap which has currency mixing issues
