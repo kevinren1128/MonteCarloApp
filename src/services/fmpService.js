@@ -260,17 +260,19 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
       obj.estimatedEpsAvg || obj.epsAvg || obj.eps ||
       obj.estimatedEpsLow || obj.estimatedEpsHigh || 0;
 
+    // Return null instead of 0 for metrics that may not be in analyst estimates
+    // This ensures we show "—" instead of fake 0% margins
     const getNetIncome = (obj) =>
       obj.estimatedNetIncomeAvg || obj.netIncomeAvg || obj.netIncome ||
-      obj.estimatedNetIncomeLow || obj.estimatedNetIncomeHigh || 0;
+      obj.estimatedNetIncomeLow || obj.estimatedNetIncomeHigh || null;
 
     const getEbitda = (obj) =>
       obj.estimatedEbitdaAvg || obj.ebitdaAvg || obj.ebitda ||
-      obj.estimatedEbitdaLow || obj.estimatedEbitdaHigh || 0;
+      obj.estimatedEbitdaLow || obj.estimatedEbitdaHigh || null;
 
     const getEbit = (obj) =>
       obj.estimatedEbitAvg || obj.ebitAvg || obj.ebit ||
-      obj.estimatedEbitLow || obj.estimatedEbitHigh || 0;
+      obj.estimatedEbitLow || obj.estimatedEbitHigh || null;
 
     const getGrossProfit = (obj) =>
       obj.estimatedGrossProfitAvg || obj.grossProfitAvg || obj.grossProfit ||
@@ -307,11 +309,11 @@ export const fetchAnalystEstimates = async (ticker, apiKey) => {
         ebitda,
         netIncome,
         eps: getEps(obj),
-        // Calculated margins
+        // Calculated margins - only if we have real data (null displays as "—")
         grossMargin: revenue && grossProfit ? grossProfit / revenue : null,
-        ebitMargin: revenue ? ebit / revenue : null,
-        ebitdaMargin: revenue ? ebitda / revenue : null,
-        netMargin: revenue ? netIncome / revenue : null,
+        ebitMargin: revenue && ebit ? ebit / revenue : null,
+        ebitdaMargin: revenue && ebitda ? ebitda / revenue : null,
+        netMargin: revenue && netIncome ? netIncome / revenue : null,
       };
     };
 
@@ -1142,23 +1144,21 @@ export const fetchConsensusData = async (ticker, apiKey) => {
   console.log(`[FMP] ${ticker} Capital: MarketCap=${(marketCap/1e9).toFixed(1)}B, Debt=${(totalDebt/1e9).toFixed(1)}B, Cash=${(cash/1e9).toFixed(1)}B, NetDebt=${(netDebt/1e9).toFixed(1)}B, EV=${(enterpriseValue/1e9).toFixed(1)}B`);
 
   // FY1 calculations (convert to USD)
+  // Use null for metrics that may not be in analyst estimates to show "—" instead of fake values
   const fy1Revenue = toUSD(estimates?.fy1?.revenue) || 0;
-  const fy1Ebitda = toUSD(estimates?.fy1?.ebitda) || 0;
-  const fy1Ebit = toUSD(estimates?.fy1?.ebit) || 0;
-  const fy1NetIncome = toUSD(estimates?.fy1?.netIncome) || 0;
+  const fy1Ebitda = toUSD(estimates?.fy1?.ebitda);  // null if not available
+  const fy1Ebit = toUSD(estimates?.fy1?.ebit);      // null if not available
+  const fy1NetIncome = toUSD(estimates?.fy1?.netIncome);  // null if not available
   const fy1Eps = toUSD(estimates?.fy1?.eps) || 0;
-
-  // Use historical gross margin to estimate forward gross profit if not available
-  const historicalGrossMargin = income?.grossProfitRatio || metrics?.grossProfitMargin || 0;
-  const fy1GrossProfit = toUSD(estimates?.fy1?.grossProfit) || (fy1Revenue * historicalGrossMargin);
+  const fy1GrossProfit = toUSD(estimates?.fy1?.grossProfit);  // null if not available - don't fake it
 
   // FY2 calculations (convert to USD)
   const fy2Revenue = toUSD(estimates?.fy2?.revenue) || 0;
-  const fy2Ebitda = toUSD(estimates?.fy2?.ebitda) || 0;
-  const fy2Ebit = toUSD(estimates?.fy2?.ebit) || 0;
-  const fy2NetIncome = toUSD(estimates?.fy2?.netIncome) || 0;
+  const fy2Ebitda = toUSD(estimates?.fy2?.ebitda);  // null if not available
+  const fy2Ebit = toUSD(estimates?.fy2?.ebit);      // null if not available
+  const fy2NetIncome = toUSD(estimates?.fy2?.netIncome);  // null if not available
   const fy2Eps = toUSD(estimates?.fy2?.eps) || 0;
-  const fy2GrossProfit = toUSD(estimates?.fy2?.grossProfit) || (fy2Revenue * historicalGrossMargin);
+  const fy2GrossProfit = toUSD(estimates?.fy2?.grossProfit);  // null if not available
 
   // FY0 (prior year) - get from most recent historical data before FY1
   const fy1FiscalYear = estimates?.fy1?.fiscalYear;
@@ -1203,10 +1203,10 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       ebitda: fy1Ebitda,
       netIncome: fy1NetIncome,
       eps: fy1Eps,
-      // Margins
-      grossMargin: fy1Revenue ? fy1GrossProfit / fy1Revenue : 0,
-      ebitMargin: fy1Revenue ? fy1Ebit / fy1Revenue : 0,
-      netMargin: fy1Revenue ? fy1NetIncome / fy1Revenue : 0,
+      // Margins - only calculate if we have real data (null displays as "—")
+      grossMargin: fy1Revenue && fy1GrossProfit ? fy1GrossProfit / fy1Revenue : null,
+      ebitMargin: fy1Revenue && fy1Ebit ? fy1Ebit / fy1Revenue : null,
+      netMargin: fy1Revenue && fy1NetIncome ? fy1NetIncome / fy1Revenue : null,
     },
 
     // FY2 estimates
@@ -1218,10 +1218,10 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       ebitda: fy2Ebitda,
       netIncome: fy2NetIncome,
       eps: fy2Eps,
-      // Margins
-      grossMargin: fy2Revenue ? fy2GrossProfit / fy2Revenue : 0,
-      ebitMargin: fy2Revenue ? fy2Ebit / fy2Revenue : 0,
-      netMargin: fy2Revenue ? fy2NetIncome / fy2Revenue : 0,
+      // Margins - only calculate if we have real data (null displays as "—")
+      grossMargin: fy2Revenue && fy2GrossProfit ? fy2GrossProfit / fy2Revenue : null,
+      ebitMargin: fy2Revenue && fy2Ebit ? fy2Ebit / fy2Revenue : null,
+      netMargin: fy2Revenue && fy2NetIncome ? fy2NetIncome / fy2Revenue : null,
     },
 
     // FY0 (prior fiscal year actuals) - for calculating YoY growth to FY1
@@ -1400,37 +1400,27 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       })),
 
       // Forward estimates from analysts (sorted nearest future first, converted to USD)
-      // Calculate grossProfit from revenue × historical margin if not available from API
-      forward: (estimates?.forwardEstimates || []).map(f => {
-        const revenue = toUSD(f.revenue);
-        const grossProfit = toUSD(f.grossProfit) || (revenue ? revenue * historicalGrossMargin : null);
-        return {
-          ...f,
-          revenue,
-          grossProfit,
-          grossMargin: revenue && grossProfit ? grossProfit / revenue : f.grossMargin,
-          ebit: toUSD(f.ebit),
-          ebitda: toUSD(f.ebitda),
-          netIncome: toUSD(f.netIncome),
-          eps: toUSD(f.eps),
-        };
-      }),
+      // Only show real analyst data - null values will display as "—"
+      forward: (estimates?.forwardEstimates || []).map(f => ({
+        ...f,
+        revenue: toUSD(f.revenue),
+        grossProfit: toUSD(f.grossProfit),
+        ebit: toUSD(f.ebit),
+        ebitda: toUSD(f.ebitda),
+        netIncome: toUSD(f.netIncome),
+        eps: toUSD(f.eps),
+      })),
 
       // FY3 estimate if available (converted to USD)
-      fy3: estimates?.fy3 ? (() => {
-        const revenue = toUSD(estimates.fy3.revenue);
-        const grossProfit = toUSD(estimates.fy3.grossProfit) || (revenue ? revenue * historicalGrossMargin : null);
-        return {
-          ...estimates.fy3,
-          revenue,
-          grossProfit,
-          grossMargin: revenue && grossProfit ? grossProfit / revenue : estimates.fy3?.grossMargin,
-          ebit: toUSD(estimates.fy3.ebit),
-          ebitda: toUSD(estimates.fy3.ebitda),
-          netIncome: toUSD(estimates.fy3.netIncome),
-          eps: toUSD(estimates.fy3.eps),
-        };
-      })() : null,
+      fy3: estimates?.fy3 ? {
+        ...estimates.fy3,
+        revenue: toUSD(estimates.fy3.revenue),
+        grossProfit: toUSD(estimates.fy3.grossProfit),
+        ebit: toUSD(estimates.fy3.ebit),
+        ebitda: toUSD(estimates.fy3.ebitda),
+        netIncome: toUSD(estimates.fy3.netIncome),
+        eps: toUSD(estimates.fy3.eps),
+      } : null,
     },
   };
 };
