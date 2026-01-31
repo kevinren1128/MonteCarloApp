@@ -114,6 +114,8 @@ const { state, logout } = useAuth();
 The Worker provides KV-cached market data, reducing Yahoo Finance API calls.
 
 ### Endpoints
+
+**Market Data (shared cache):**
 ```
 GET /api/prices?symbols=AAPL,MSFT&range=1y   → Historical prices (4h cache)
 GET /api/quotes?symbols=AAPL,MSFT            → Current quotes (15m cache)
@@ -122,13 +124,25 @@ GET /api/consensus?symbols=AAPL              → FMP analyst data (4h cache)
 GET /api/fx?pairs=EURUSD,GBPUSD              → Exchange rates (24h cache)
 ```
 
+**Derived Metrics (pre-computed, shared cache):**
+```
+GET /api/beta?symbols=AAPL&benchmark=SPY&range=1y   → Beta vs benchmark (6h cache)
+GET /api/volatility?symbols=AAPL&range=1y           → Annualized vol + returns (6h cache)
+GET /api/distribution?symbols=AAPL&range=5y&bootstrap=1000  → P5/P25/P50/P75/P95 (12h cache)
+GET /api/calendar-returns?symbols=AAPL&range=10y    → Calendar year returns (24h cache)
+```
+
 ### Cache TTLs (KV Namespace: MONTE_CARLO_CACHE)
 | Data Type | TTL | Key Pattern |
 |-----------|-----|-------------|
-| Historical prices | 4 hours | `prices:v1:{symbol}:{range}` |
+| Historical prices | 4 hours | `prices:v1:{symbol}:{range}:{interval}` |
 | Quotes | 15 minutes | `quotes:v1:{symbol}` |
 | Company profile | 7 days | `profile:v1:{symbol}` |
 | FX rates | 24 hours | `fx:v1:{base}:{quote}` |
+| Beta | 6 hours | `beta:v1:{symbol}:{benchmark}:{range}:{interval}` |
+| Volatility | 6 hours | `vol:v1:{symbol}:{range}:{interval}` |
+| Distribution | 12 hours | `dist:v1:{symbol}:{range}:{interval}:b{count}` |
+| Calendar returns | 24 hours | `calret:v1:{symbol}:{range}:{interval}` |
 
 ### Fallback Pattern
 Frontend tries Worker first, falls back to CORS proxy if Worker fails:
@@ -155,16 +169,32 @@ npx wrangler kv key list CACHE   # List cached keys
 
 ### Tables
 
+**Core Tables:**
 | Table | Purpose | Key Fields |
 |-------|---------|------------|
 | `portfolios` | Portfolio metadata | user_id, name, cash_balance, revision |
 | `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95, price |
 | `portfolio_settings` | UI preferences | portfolio_id, settings (JSONB) |
+
+**Analysis Results:**
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
 | `correlation_overrides` | Edited correlation matrix | portfolio_id, correlation_matrix (JSONB), tickers[] |
 | `simulation_results` | Monte Carlo outputs | portfolio_id, num_paths, percentiles, var_95, cvar_95 |
 | `factor_results` | Factor analysis | portfolio_id, factor_exposures, r_squared |
 | `optimization_results` | Portfolio optimization | portfolio_id, optimal_weights, efficient_frontier |
 | `reports` | Generated report history | portfolio_id, title, generated_at |
+
+**Position Enrichment (Added Jan 2026):**
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
+| `position_notes` | Investment thesis & tags | position_id, notes, thesis, tags[] |
+| `target_allocations` | Rebalancing targets | portfolio_id, symbol, target_weight, min_weight, max_weight |
+| `dividend_history` | Dividend tracking | portfolio_id, symbol, ex_date, amount, shares_held, reinvested |
+
+**Cache:**
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
 | `market_data_cache` | Per-user price cache (optional) | user_id, symbol, data (JSONB) |
 
 ### Row Level Security (RLS)
@@ -199,14 +229,35 @@ supabase                     // Supabase client (exported for direct queries)
 
 ### portfolioService.js
 ```javascript
+// Core CRUD
 getOrCreatePortfolio()       // Get user's portfolio (creates if none)
 savePositions(positions, cash)  // Upsert positions with distribution params
+loadFullPortfolio()          // Load everything for a user
+
+// Analysis results
 saveCorrelationOverrides(matrix, tickers, method)
 saveSimulationResults(results)
 saveFactorResults(results)
 saveOptimizationResults(results)
 saveSettings(settings)
-loadFullPortfolio()          // Load everything for a user
+
+// Position notes (investment thesis)
+savePositionNotes(positionId, notes, tags, thesis)
+getPositionNotes(positionId)
+getAllPositionNotes(portfolioId)
+deletePositionNotes(positionId)
+
+// Target allocations (rebalancing)
+saveTargetAllocation(portfolioId, symbol, targetWeight, minWeight, maxWeight)
+saveTargetAllocations(portfolioId, allocations)  // Batch save
+getTargetAllocations(portfolioId)
+deleteTargetAllocation(portfolioId, symbol)
+
+// Dividend tracking
+addDividend(portfolioId, symbol, exDate, amount, sharesHeld, reinvested)
+getDividends(portfolioId, symbol)  // Optional symbol filter
+getDividendSummary(portfolioId)    // Aggregated by symbol
+deleteDividend(dividendId)
 ```
 
 ### yahooFinance.js
@@ -220,11 +271,19 @@ fetchYahooData(symbol)            // Combined quote + history + profile
 
 ### marketService.js
 ```javascript
+// Market data (shared cache)
 fetchPrices(symbols, range)    // Batch price fetch via Worker
 fetchQuotes(symbols)           // Batch quotes via Worker
 fetchProfiles(symbols)         // Batch profiles via Worker
 fetchExchangeRates(pairs)      // Batch FX via Worker
 isWorkerAvailable()            // Check if Worker is configured
+
+// Derived metrics (pre-computed by Worker)
+fetchBetas(symbols, benchmark, range)      // Beta vs benchmark
+fetchVolatility(symbols, range)            // Annualized vol + returns
+fetchDistributions(symbols, range, bootstrap)  // Bootstrap p5-p95
+fetchCalendarReturns(symbols, range)       // Calendar year returns
+fetchAllDerivedMetrics(symbols)            // Fetch all in parallel
 ```
 
 ---
@@ -280,6 +339,12 @@ Same VITE_* variables configured in Vercel project settings.
 5. **Dropdown Position Fix**: UserMenu dropdown opens upward (`bottom: 100%`) because avatar is in bottom-left sidebar.
 
 6. **Minimal Sync Indicators**: Only show badge for active states (syncing spinner, synced checkmark). Don't show alarming error icons - details available in dropdown.
+
+7. **Worker Pre-Computation**: Expensive computations (beta, volatility, distribution bootstrap) are done on Cloudflare Worker and cached. Frontend uses these if available, falls back to local computation.
+
+8. **Draggable Sidebar**: Sidebar width is adjustable by dragging the right edge. Width persists to localStorage. Drag below 100px threshold to auto-collapse.
+
+9. **Sign-Out Reset**: When user signs out, app resets to clean default state (not the server-side data from previous user).
 
 ### Quick Navigation
 

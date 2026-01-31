@@ -4,6 +4,151 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [6.4.0] - 2026-01-31
+
+### 🏗️ Server-Side Derived Metrics & Infrastructure Improvements
+
+This release adds Cloudflare Worker-computed derived metrics, new Supabase tables for position enrichment, and significant UI improvements.
+
+#### Cloudflare Worker Enhancements
+
+**New Derived Metrics Endpoints:**
+- `GET /api/beta?symbols=AAPL&benchmark=SPY&range=1y` - Pre-computed beta vs benchmark (6h cache)
+- `GET /api/volatility?symbols=AAPL&range=1y` - Annualized volatility + YTD/1Y/30D returns (6h cache)
+- `GET /api/distribution?symbols=AAPL&range=5y&bootstrap=1000` - Bootstrap P5/P25/P50/P75/P95 (12h cache)
+- `GET /api/calendar-returns?symbols=AAPL&range=10y` - Calendar year returns (24h cache)
+
+**Why Worker Pre-Computation:**
+- Expensive bootstrap (1000 iterations) runs once on Worker, cached for all users
+- Beta/volatility calculations shared across users
+- Reduces client CPU usage and speeds up "Load All"
+- Frontend uses Worker data if available, falls back to local computation
+
+**New KV Cache Keys:**
+```
+beta:v1:{symbol}:{benchmark}:{range}:{interval}
+vol:v1:{symbol}:{range}:{interval}
+dist:v1:{symbol}:{range}:{interval}:b{count}
+calret:v1:{symbol}:{range}:{interval}
+```
+
+#### New Supabase Tables
+
+**Position Notes (Investment Thesis):**
+```sql
+CREATE TABLE position_notes (
+  position_id UUID PRIMARY KEY REFERENCES positions(id),
+  notes TEXT,
+  tags TEXT[],
+  thesis TEXT,
+  created_at, updated_at
+);
+```
+
+**Target Allocations (Rebalancing):**
+```sql
+CREATE TABLE target_allocations (
+  portfolio_id UUID REFERENCES portfolios(id),
+  symbol TEXT,
+  target_weight NUMERIC,
+  min_weight NUMERIC,
+  max_weight NUMERIC,
+  PRIMARY KEY (portfolio_id, symbol)
+);
+```
+
+**Dividend History:**
+```sql
+CREATE TABLE dividend_history (
+  id UUID PRIMARY KEY,
+  portfolio_id UUID REFERENCES portfolios(id),
+  symbol TEXT,
+  ex_date DATE,
+  amount NUMERIC,
+  shares_held NUMERIC,
+  total_amount NUMERIC,
+  reinvested BOOLEAN DEFAULT false
+);
+```
+
+All tables have Row Level Security enabled.
+
+#### Services Layer Updates
+
+**marketService.js - New Functions:**
+- `fetchBetas(symbols, benchmark, range)` - Beta from Worker
+- `fetchVolatility(symbols, range)` - Volatility from Worker
+- `fetchDistributions(symbols, range, bootstrap)` - Bootstrap distribution from Worker
+- `fetchCalendarReturns(symbols, range)` - Calendar returns from Worker
+- `fetchAllDerivedMetrics(symbols)` - Fetch all in parallel
+
+**portfolioService.js - New Functions:**
+- `savePositionNotes(positionId, notes, tags, thesis)`
+- `getPositionNotes(positionId)`, `getAllPositionNotes(portfolioId)`
+- `saveTargetAllocation(portfolioId, symbol, ...)`, `saveTargetAllocations(portfolioId, allocations)`
+- `getTargetAllocations(portfolioId)`, `deleteTargetAllocation(portfolioId, symbol)`
+- `addDividend(...)`, `getDividends(portfolioId, symbol)`, `getDividendSummary(portfolioId)`
+
+#### UI Improvements
+
+**Draggable Sidebar Width:**
+- Drag right edge to resize sidebar (120px - 400px)
+- Width persists to localStorage (`sidebar-expanded-width` key)
+- Drag below 100px to auto-collapse
+- Drag from collapsed state to expand
+- Double-click handle to reset to default (220px)
+
+**Inline Sync Indicator:**
+- Moved sync icon from overlay badge to inline beside user avatar
+- Cleaner visual presentation
+- Autosave indicator moved to User Account section (right-justified)
+
+**Sign-Out Reset:**
+- App resets to default state on sign-out
+- Prevents data bleed between users
+- Toast notification on reset
+
+#### Bug Fixes
+
+**Keyboard Shortcut Fix:**
+- Key `8` now correctly switches to Export tab (was checking `key <= '7'`)
+
+**Load All Performance:**
+- Fixed stall after tickers load
+- Early price update (PHASE 1.6) before heavy processing
+- Throttled progress updates (every 10 tickers instead of 2)
+- Prices and currency adjustments now visible immediately
+
+**Currency Caching:**
+- Added currency/exchangeRate/domesticPrice to localStorage cache
+- FX rates now fetched for all sources (newly fetched + cached + in-memory)
+
+#### Infrastructure
+
+**Migration File:**
+- `supabase/migrations/20260131_add_notes_targets_dividends.sql`
+- Creates position_notes, target_allocations, dividend_history tables
+- Adds RLS policies and indexes
+
+**Worker Version:** 2.2.0 (added derived metrics endpoints)
+
+#### Files Changed
+
+**New/Modified Services:**
+- `worker/index.js` - Added 4 new endpoints + computation helpers
+- `src/services/marketService.js` - Added derived metrics fetching
+- `src/services/portfolioService.js` - Added notes/targets/dividends CRUD
+
+**UI Components:**
+- `src/components/common/Sidebar.jsx` - Draggable width, autosave indicator placement
+- `src/components/auth/UserMenu.jsx` - Inline sync indicator option
+
+**App Core:**
+- `src/App.jsx` - Sign-out reset, keyboard fix, early price updates, Worker metrics integration
+- `src/utils/marketDataHelpers.js` - Currency fields in cache
+
+---
+
 ## [6.3.0] - 2026-01-25
 
 ### 🌍 International Currency Support & Bug Fixes

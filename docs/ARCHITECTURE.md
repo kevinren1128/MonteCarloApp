@@ -1115,16 +1115,32 @@ localStorage.setItem('debug', 'true');
 
 ### Tables Overview
 
+**Core Tables:**
 | Table | Purpose | Key Fields |
 |-------|---------|------------|
 | `portfolios` | Portfolio metadata | user_id, name, cash_balance, revision |
-| `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95 |
+| `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95, price |
 | `portfolio_settings` | UI preferences | portfolio_id, settings (JSONB) |
+
+**Analysis Results:**
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
 | `correlation_overrides` | Edited correlation matrix | portfolio_id, correlation_matrix (JSONB), tickers[] |
 | `simulation_results` | Monte Carlo outputs | portfolio_id, num_paths, percentiles, var_95, cvar_95 |
 | `factor_results` | Factor analysis | portfolio_id, factor_exposures, r_squared |
 | `optimization_results` | Portfolio optimization | portfolio_id, optimal_weights, efficient_frontier |
 | `reports` | Generated report history | portfolio_id, title, generated_at |
+
+**Position Enrichment (Added Jan 2026):**
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
+| `position_notes` | Investment thesis & tags | position_id (FK→positions), notes, thesis, tags[] |
+| `target_allocations` | Rebalancing targets | portfolio_id, symbol (PK), target_weight, min_weight, max_weight |
+| `dividend_history` | Dividend tracking | id, portfolio_id, symbol, ex_date, amount, shares_held, reinvested |
+
+**Cache:**
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
 | `market_data_cache` | Per-user price cache | user_id, symbol, data (JSONB) |
 
 ### Row Level Security (RLS)
@@ -1175,6 +1191,7 @@ npx supabase link --project-ref uoyvihrdllwslljminid
 
 ### Endpoints
 
+**Market Data (shared cache):**
 | Endpoint | Purpose | Cache TTL |
 |----------|---------|-----------|
 | `GET /api/prices?symbols=AAPL,MSFT&range=1y` | Historical prices | 4 hours |
@@ -1183,13 +1200,28 @@ npx supabase link --project-ref uoyvihrdllwslljminid
 | `GET /api/consensus?symbols=AAPL` | FMP analyst data | 4 hours |
 | `GET /api/fx?pairs=EURUSD,GBPUSD` | Exchange rates | 24 hours |
 
+**Derived Metrics (pre-computed):**
+| Endpoint | Purpose | Cache TTL |
+|----------|---------|-----------|
+| `GET /api/beta?symbols=AAPL&benchmark=SPY&range=1y` | Beta vs benchmark | 6 hours |
+| `GET /api/volatility?symbols=AAPL&range=1y` | Annualized volatility + returns | 6 hours |
+| `GET /api/distribution?symbols=AAPL&range=5y&bootstrap=1000` | P5/P25/P50/P75/P95 bootstrap | 12 hours |
+| `GET /api/calendar-returns?symbols=AAPL&range=10y` | Calendar year returns | 24 hours |
+
 ### KV Cache Key Patterns
 
 ```
-prices:v1:{symbol}:{range}    # e.g., prices:v1:AAPL:1y
-quotes:v1:{symbol}            # e.g., quotes:v1:AAPL
-profile:v1:{symbol}           # e.g., profile:v1:AAPL
-fx:v1:{base}:{quote}          # e.g., fx:v1:EUR:USD
+# Market data
+prices:v1:{symbol}:{range}:{interval}  # e.g., prices:v1:AAPL:1y:1d
+quotes:v1:{symbol}                      # e.g., quotes:v1:AAPL
+profile:v1:{symbol}                     # e.g., profile:v1:AAPL
+fx:v1:{base}:{quote}                    # e.g., fx:v1:EUR:USD
+
+# Derived metrics
+beta:v1:{symbol}:{benchmark}:{range}:{interval}  # e.g., beta:v1:AAPL:SPY:1y:1d
+vol:v1:{symbol}:{range}:{interval}               # e.g., vol:v1:AAPL:1y:1d
+dist:v1:{symbol}:{range}:{interval}:b{count}     # e.g., dist:v1:AAPL:5y:1d:b1000
+calret:v1:{symbol}:{range}:{interval}            # e.g., calret:v1:AAPL:10y:1d
 ```
 
 ### Deployment
