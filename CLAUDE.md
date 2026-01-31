@@ -173,7 +173,7 @@ npx wrangler kv key list CACHE   # List cached keys
 | Table | Purpose | Key Fields |
 |-------|---------|------------|
 | `portfolios` | Portfolio metadata | user_id, name, cash_balance, revision |
-| `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95, price |
+| `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95, price, currency, domestic_price, exchange_rate |
 | `portfolio_settings` | UI preferences | portfolio_id, settings (JSONB) |
 
 **Analysis Results:**
@@ -308,6 +308,92 @@ const { syncState } = usePortfolioSync();
 // syncState = { status: 'idle'|'syncing'|'synced'|'error'|'offline', lastSynced, hasUnsyncedChanges }
 ```
 
+### Sync Deduping (positionsKey)
+The sync effect uses a JSON key to avoid redundant saves:
+```javascript
+const positionsKey = JSON.stringify(positions.map(p => ({
+  ticker, quantity, price,
+  p5, p25, p50, p75, p95,
+  currency, domesticPrice, exchangeRate  // Include FX fields!
+})));
+```
+**Important:** If you add new fields to positions that should trigger sync, add them to `positionsKey` in App.jsx (~line 1628).
+
+---
+
+## International Currency / FX Handling
+
+The app supports international stocks (e.g., 6525.T, BESI.AS) with automatic USD conversion.
+
+### Position Currency Fields
+Each position has three currency-related fields:
+```javascript
+{
+  price: 42.50,           // USD price (used for calculations)
+  currency: 'JPY',        // Original/local currency
+  domesticPrice: 6400,    // Price in local currency
+  exchangeRate: 0.00664,  // Local → USD conversion rate
+}
+```
+
+### FX Data Flow
+```
+1. User clicks "Load All" or "Refresh Prices"
+                  │
+                  ▼
+2. Cloudflare Worker fetches prices
+   - Detects non-USD currency from Yahoo Finance
+   - Fetches FX rate (cached 24h)
+   - Returns: prices (USD), localCurrency, localPrices, fxRate
+                  │
+                  ▼
+3. Frontend receives data with FX metadata
+   - quickPriceUpdates built with all 4 fields
+   - setPositions updates positions with currency data
+                  │
+                  ▼
+4. Sync detects change (positionsKey includes FX fields)
+   - Saves to Supabase: currency, domestic_price, exchange_rate
+                  │
+                  ▼
+5. On next login, positions restore with FX data
+   - No fresh fetch needed (data persisted)
+```
+
+### Worker Currency Conversion
+The Worker handles FX conversion server-side:
+```
+GET /api/prices?symbols=6525.T&range=1y&currency=USD
+
+Response:
+{
+  "6525.T": {
+    "prices": [42.1, 42.3, ...],      // Already converted to USD
+    "currency": "USD",
+    "localCurrency": "JPY",
+    "localPrices": [6350, 6380, ...], // Original JPY prices
+    "fxRate": 0.00664,                // JPY → USD rate
+    "fxTimestamp": "2026-01-31T..."
+  }
+}
+```
+
+### Auto-Refresh on Login
+When user logs in:
+1. Portfolio loads from Supabase
+2. After 500ms delay, `refreshAllPrices()` auto-triggers
+3. Fetches current market prices (including FX for international)
+4. Triggers re-sort by Value column
+
+### Auto-Sort After Price Refresh
+When prices update:
+1. `setLastPriceRefresh(Date.now())` is called
+2. PositionsTab detects timestamp change
+3. Clears `lastSortedRef.current` (cached sort order)
+4. Next render triggers fresh sort by current sort column
+
+This works for: Load All, Refresh Prices button, and auto-refresh on login.
+
 ---
 
 ## Environment Variables
@@ -345,6 +431,12 @@ Same VITE_* variables configured in Vercel project settings.
 8. **Draggable Sidebar**: Sidebar width is adjustable by dragging the right edge. Width persists to localStorage. Drag below 100px threshold to auto-collapse.
 
 9. **Sign-Out Reset**: When user signs out, app resets to clean default state (not the server-side data from previous user).
+
+10. **International FX Persistence**: Currency/domesticPrice/exchangeRate are persisted to Supabase. On login, positions restore with FX data, then auto-refresh fetches current prices.
+
+11. **Auto-Sort on Price Refresh**: The `lastPriceRefresh` timestamp triggers PositionsTab to clear its cached sort order. This ensures the Value column re-sorts after any price update.
+
+12. **positionsKey Deduping**: The sync effect uses a JSON key to detect changes. If you add new fields to positions that should trigger sync, you MUST add them to `positionsKey` in App.jsx (~line 1628).
 
 ### Quick Navigation
 
@@ -400,3 +492,70 @@ Key endpoints used:
 - `/stable/key-metrics` - Financial ratios and metrics
 - `/stable/analyst-estimates` - Revenue, EPS, EBITDA estimates
 - `/stable/earnings` - Historical and upcoming earnings
+
+---
+
+## Gotchas & Non-Obvious Behavior
+
+### Things That Confused Us (So You Don't Have To)
+
+1. **positionsKey must include all synced fields**
+   - If you add a new field to positions that should persist, add it to `positionsKey` in App.jsx
+   - Otherwise, changes to that field won't trigger sync
+   - We learned this the hard way with currency fields
+
+2. **PositionsTab caches sort order**
+   - `lastSortedRef.current` preserves row order during editing
+   - This prevents annoying re-sorts while user types
+   - But it means explicit re-sort requires clearing this ref
+   - Use `lastPriceRefresh` timestamp to trigger re-sort
+
+3. **Cached vs Fresh Worker data**
+   - Worker returns USD-converted prices when `currency=USD` is requested
+   - But if using cached data, `histResult.data` might be in local currency
+   - Check `histResult.cached` flag before assuming currency
+
+4. **International ticker detection**
+   - Pattern: `/\.(T|HK|SS|SZ|TW|AS|PA|DE|L|MI|MC|SW|AX|TO|V)$/i`
+   - Or numeric prefix: `/^\d+\.(T|HK)$/` (e.g., 6525.T)
+   - Used to force fresh fetch when currency info is missing
+
+5. **Login flow timing**
+   - Data loads from Supabase first
+   - 500ms delay before auto-refresh (lets state settle)
+   - `shouldRefreshAfterLogin` flag bridges the async gap
+
+6. **Delete + Insert for positions**
+   - We don't upsert because user can have same ticker multiple times
+   - Always delete all, then insert fresh
+   - This is intentional, not a bug
+
+### What We Tried That Didn't Work
+
+1. **Calling refreshAllPrices directly from login effect**
+   - Problem: Function not defined yet (hoisting issue)
+   - Solution: Use `shouldRefreshAfterLogin` flag + separate effect
+
+2. **Sorting by detecting position changes**
+   - Problem: Can't distinguish "user editing" from "price refresh"
+   - Solution: Explicit `lastPriceRefresh` timestamp
+
+3. **Caching FX-converted prices in KV with currency in key**
+   - Problem: Same data cached twice (with/without conversion)
+   - Solution: Cache raw data, do FX conversion on each request
+
+---
+
+## Recent Session Context (Jan 31, 2026)
+
+**What was fixed today:**
+- Layer 3: Supabase persistence for currency fields (currency, domestic_price, exchange_rate)
+- Fixed `exchangeRate` not being saved to position objects
+- Fixed `positionsKey` not including currency fields (sync was skipping FX changes)
+- Added auto-sort by Value after price refresh
+- Added auto-refresh prices on login
+
+**Current state:**
+- International stocks (6525.T, BESI.AS) work end-to-end
+- FX data persists across login sessions
+- Positions auto-sort by value after any price refresh

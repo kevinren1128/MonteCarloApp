@@ -4,6 +4,86 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [6.4.1] - 2026-01-31
+
+### 🌍 International Currency Persistence & UX Improvements
+
+This release completes Layer 3 of the FX handling architecture, ensuring international stock data persists across login sessions.
+
+#### International Currency (FX) Persistence
+
+**New Position Fields in Supabase:**
+```sql
+ALTER TABLE positions
+  ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD',
+  ADD COLUMN domestic_price NUMERIC,
+  ADD COLUMN exchange_rate NUMERIC NOT NULL DEFAULT 1;
+```
+
+**Complete FX Data Flow:**
+1. User loads positions with international stocks (6525.T, BESI.AS)
+2. Worker fetches prices with FX conversion (returns USD + local currency metadata)
+3. Frontend stores currency, domesticPrice, exchangeRate on each position
+4. Sync saves these fields to Supabase
+5. On next login, FX data restores without needing fresh fetch
+
+**Files Changed:**
+- `src/services/portfolioService.js` - Save/load currency fields
+- `src/App.jsx` - Include currency in position restore and positionsKey
+
+#### Auto-Refresh on Login
+
+When user logs in, prices now automatically refresh:
+- Waits 500ms after portfolio loads from Supabase
+- Calls `refreshAllPrices()` to fetch current market data
+- Includes FX conversion for international stocks
+- Ensures user sees current prices immediately
+
+**Implementation:**
+- New state: `shouldRefreshAfterLogin`
+- Effect watches flag + positions.length to trigger refresh
+
+#### Auto-Sort by Value After Price Refresh
+
+Positions table now auto-sorts after any price update:
+- Load All → sorts by Value
+- Refresh Prices → sorts by Value
+- Login auto-refresh → sorts by Value
+
+**Implementation:**
+- New state: `lastPriceRefresh` (timestamp)
+- PositionsTab clears `lastSortedRef.current` when timestamp changes
+- Next render triggers fresh sort
+
+**Why this matters:**
+- Previously, sort order was cached to prevent re-sorting during editing
+- This caused prices to update but rows to stay in old order
+- Now distinguishes "user editing" from "price refresh" via timestamp
+
+#### Bug Fixes
+
+**Fixed: Currency fields not syncing to Supabase**
+- Root cause: `positionsKey` only included ticker, quantity, p5-p95
+- Currency/price changes didn't trigger sync
+- Fix: Added price, currency, domesticPrice, exchangeRate to positionsKey
+
+**Fixed: exchangeRate not saved to position objects**
+- Root cause: `setPositions` calls included currency/domesticPrice but not exchangeRate
+- Fix: Added exchangeRate to all position update paths
+
+**Fixed: Column sorting not working after Load All**
+- Root cause: `hasBrandNewPosition` was true after updates, skipping sort
+- Fix: Track `sortSettingsChanged` separately, always sort when user clicks header
+
+#### Documentation
+
+- Updated CLAUDE.md with FX handling section
+- Updated ARCHITECTURE.md with currency fields
+- Updated README.md (removed outdated "No Server Persistence" limitation)
+- Added "Gotchas & Non-Obvious Behavior" section
+
+---
+
 ## [6.4.0] - 2026-01-31
 
 ### 🏗️ Server-Side Derived Metrics & Infrastructure Improvements

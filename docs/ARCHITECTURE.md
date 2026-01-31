@@ -203,6 +203,16 @@ User clicks "Sign in with Google"
 │ Compare revisions:           │
 │ - Server higher → pull       │
 │ - Local higher → push        │
+└──────────────┬───────────────┘
+               │
+               ▼ (500ms delay)
+┌──────────────────────────────┐
+│ Auto-refresh prices          │
+│ refreshAllPrices()           │
+│                              │
+│ - Fetches current prices     │
+│ - Includes FX for intl stocks│
+│ - Triggers re-sort by Value  │
 └──────────────────────────────┘
 ```
 
@@ -436,14 +446,28 @@ A position represents a stock/ETF holding in the portfolio:
   id: 'pos_1704067200000',     // Unique ID (timestamp-based)
   ticker: 'AAPL',              // Stock symbol
   shares: 100,                 // Number of shares (can be negative for shorts)
-  price: 178.50,               // Current price per share
-  currency: 'USD',             // Currency
+  price: 178.50,               // Current price per share (always USD)
+  currency: 'USD',             // Original/local currency of the security
+  domesticPrice: 178.50,       // Price in local currency (same as price for USD)
+  exchangeRate: 1,             // Local currency → USD conversion rate
   distribution: {              // Return distribution parameters
     mu: 0.12,                  // Expected annual return (12%)
     sigma: 0.28,               // Annual volatility (28%)
     skew: -0.2,                // Negative skew (fatter left tail)
     tailDf: 8                  // Student-t df (lower = fatter tails)
   }
+}
+
+// Example: Japanese stock
+{
+  id: 'pos_1704067200001',
+  ticker: '6525.T',
+  shares: 50,
+  price: 42.50,                // USD price (after conversion)
+  currency: 'JPY',             // Local currency
+  domesticPrice: 6400,         // JPY price
+  exchangeRate: 0.00664,       // JPY → USD rate
+  // ...
 }
 ```
 
@@ -1119,7 +1143,7 @@ localStorage.setItem('debug', 'true');
 | Table | Purpose | Key Fields |
 |-------|---------|------------|
 | `portfolios` | Portfolio metadata | user_id, name, cash_balance, revision |
-| `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95, price |
+| `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95, price, currency, domestic_price, exchange_rate |
 | `portfolio_settings` | UI preferences | portfolio_id, settings (JSONB) |
 
 **Analysis Results:**

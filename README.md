@@ -211,10 +211,17 @@ Tested on:
 
 ## Known Limitations
 
-1. **Yahoo Finance CORS** - Requires proxy; may fail if proxies are down
-2. **Large Main File** - App.jsx is ~8,500 lines (refactoring in progress)
-3. **No Server Persistence** - Data stored in browser localStorage only
-4. **PDF Font Limitations** - Uses built-in jsPDF fonts
+1. **Yahoo Finance CORS** - Uses Cloudflare Worker for caching; falls back to CORS proxy if Worker unavailable
+2. **Large Main File** - App.jsx is ~8,000 lines (refactoring in progress)
+3. **PDF Font Limitations** - Uses built-in jsPDF fonts
+
+## Cloud Features (Requires Google Sign-In)
+
+When signed in with Google, the app provides:
+- **Cloud Sync** - Portfolio data syncs to Supabase (auto-save with 2s debounce)
+- **Cross-Device Access** - Access your portfolio from any browser
+- **Simulation History** - Analysis results persist across sessions
+- **International Currency Support** - FX data persists for international stocks
 
 ## Contributing
 
