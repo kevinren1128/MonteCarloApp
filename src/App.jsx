@@ -2478,7 +2478,8 @@ function MonteCarloSimulator() {
     let workerDerivedMetrics = { betas: null, volatility: null, distributions: null, calendarReturns: null, correlation: null };
     if (isWorkerAvailable()) {
       try {
-        workerDerivedMetrics = await fetchAllDerivedMetrics(allTickers);
+        // Pass portfolio tickers (not factor ETFs) for correlation matrix
+        workerDerivedMetrics = await fetchAllDerivedMetrics(allTickers, { correlationSymbols: tickers });
         const workerHits = Object.values(workerDerivedMetrics).filter(v => v && Object.keys(v).length > 0).length;
         console.log(`⚡ Worker derived metrics: ${workerHits}/5 endpoints returned data`);
 
