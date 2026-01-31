@@ -94,8 +94,190 @@ A **Monte Carlo portfolio simulation tool** that:
 | **Styling** | Inline styles | No CSS framework (keeps bundle small) |
 | **Charts** | Recharts | React charting library |
 | **State** | React hooks + Context | No Redux needed |
-| **Persistence** | localStorage | Portfolio survives refresh |
+| **Persistence** | localStorage + Supabase | Local cache + cloud sync |
 | **Heavy Compute** | Web Workers | Non-blocking simulations |
+| **Market Data Cache** | Cloudflare KV | Shared edge cache |
+| **Auth** | Supabase (Google OAuth) | Secure user sessions |
+| **Hosting** | Vercel | Auto-deploy from GitHub |
+
+---
+
+## Server-Side Persistence Architecture
+
+The app uses a hybrid architecture for persistence and caching:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                           VERCEL                                     │
+│            React App (static) - CDN edge cached                     │
+│            https://monte-carlo-app-ivory.vercel.app                 │
+└───────────────────┬─────────────────────────┬───────────────────────┘
+                    │                         │
+                    ▼                         ▼
+┌───────────────────────────────────┐  ┌──────────────────────────────┐
+│     CLOUDFLARE WORKER + KV        │  │         SUPABASE             │
+│     (Shared Market Data Cache)    │  │   (Auth + User Data)         │
+│                                   │  │                              │
+│  GET /api/prices?symbols=...      │  │  Google OAuth                │
+│  GET /api/quotes?symbols=...      │  │  PostgreSQL + RLS            │
+│  GET /api/profile?symbols=...     │  │                              │
+│  GET /api/consensus?symbols=...   │  │  Tables:                     │
+│  GET /api/fx?pairs=...            │  │  - portfolios                │
+│                                   │  │  - positions                 │
+│  KV Cache TTLs:                   │  │  - correlation_overrides     │
+│  - Prices: 4 hours                │  │  - simulation_results        │
+│  - Quotes: 15 minutes             │  │  - factor_results            │
+│  - Profiles: 7 days               │  │  - optimization_results      │
+│  - FX rates: 24 hours             │  │  - portfolio_settings        │
+│                                   │  │                              │
+│  monte-carlo-cache.               │  │  uoyvihrdllwslljminid.       │
+│  kevinren1128.workers.dev         │  │  supabase.co                 │
+└───────────────────────────────────┘  └──────────────────────────────┘
+                    │                         │
+                    └────────────┬────────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │   localStorage          │
+                    │   (Fast local cache)    │
+                    │   Syncs with Supabase   │
+                    └─────────────────────────┘
+```
+
+### Why This Architecture?
+
+| Service | Purpose | Why Chosen |
+|---------|---------|------------|
+| **Vercel** | App hosting | Free, auto-deploy from GitHub, React/Vite optimized |
+| **Cloudflare Worker + KV** | Market data cache | Edge-cached, shared across users, reduces API rate limiting |
+| **Supabase** | Auth + user data | PostgreSQL with RLS, Google OAuth built-in, generous free tier |
+| **localStorage** | Local cache | Instant load, offline support, syncs on login |
+
+**Cost: $0/month** on free tiers for personal use.
+
+### Deployment URLs
+
+| Service | URL |
+|---------|-----|
+| **Production App** | https://monte-carlo-app-ivory.vercel.app |
+| **Cloudflare Worker** | https://monte-carlo-cache.kevinren1128.workers.dev |
+| **Supabase Dashboard** | https://supabase.com/dashboard/project/uoyvihrdllwslljminid |
+
+---
+
+## Authentication Flow
+
+Auth is handled by Supabase with Google OAuth provider.
+
+```
+User clicks "Sign in with Google"
+           │
+           ▼
+┌──────────────────────────────┐
+│ signInWithGoogle()           │
+│ (authService.js)             │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ Redirect to Google OAuth     │
+│ User consents                │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ Redirect back to app         │
+│ Supabase exchanges for JWT   │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ AuthContext updates state    │
+│ { isAuthenticated: true }    │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ usePortfolioSync triggers    │
+│ loadFromServer()             │
+│                              │
+│ Compare revisions:           │
+│ - Server higher → pull       │
+│ - Local higher → push        │
+└──────────────────────────────┘
+```
+
+### Auth Files
+
+```
+src/services/authService.js    # Supabase client, OAuth methods
+src/contexts/AuthContext.jsx   # Auth state provider
+src/components/auth/
+  GoogleSignIn.jsx             # Sign-in button
+  UserMenu.jsx                 # Avatar dropdown with sync status
+```
+
+---
+
+## Data Sync Flow
+
+### On Login (Initial Sync)
+
+```
+User logs in
+     │
+     ▼
+┌────────────────────────────┐
+│ loadFromServer()           │
+│ Fetch portfolio + results  │
+└────────────┬───────────────┘
+             │
+     ┌───────┴───────┐
+     │               │
+     ▼               ▼
+Server has      Local has
+higher rev      higher rev
+     │               │
+     ▼               ▼
+Pull server     Push local
+data to local   to server
+```
+
+### On Change (Auto-Save)
+
+```
+User edits position/distribution
+           │
+           ▼
+┌──────────────────────────────┐
+│ usePortfolioSync debounces   │
+│ (2 second delay)             │
+└──────────────┬───────────────┘
+               │
+               ▼ (after 2s idle)
+┌──────────────────────────────┐
+│ savePositionsToServer()      │
+│ → Upserts portfolio          │
+│ → Deletes old positions      │
+│ → Inserts new positions      │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌──────────────────────────────┐
+│ Sync indicator:              │
+│ 🔄 syncing → ✓ synced        │
+└──────────────────────────────┘
+```
+
+### Sync State
+
+```javascript
+const { syncState } = usePortfolioSync();
+// syncState = {
+//   status: 'idle' | 'syncing' | 'synced' | 'error' | 'offline',
+//   lastSynced: Date,
+//   hasUnsyncedChanges: boolean
+// }
+```
 
 ---
 
@@ -130,16 +312,21 @@ monte-carlo-app/
 │   │
 │   ├── hooks/                     # 🎣 Custom React Hooks
 │   │   ├── usePortfolio.js        # Portfolio state & operations
+│   │   ├── usePortfolioSync.js    # Cloud sync (Supabase)
 │   │   ├── useMarketData.js       # Unified data fetching
 │   │   ├── useCorrelation.js      # Correlation computation
 │   │   ├── useSimulation.js       # Monte Carlo runner
 │   │   ├── useFactorAnalysis.js   # Factor decomposition
 │   │   ├── useOptimization.js     # Portfolio optimization
 │   │   ├── useLocalStorage.js     # Persistence helper
+│   │   ├── useAutosave.js         # Local autosave
 │   │   └── index.js
 │   │
 │   ├── services/                  # 🌐 External API Clients
-│   │   ├── yahooFinance.js        # Yahoo Finance API
+│   │   ├── authService.js         # Supabase auth (Google OAuth)
+│   │   ├── portfolioService.js    # Supabase CRUD (portfolios, positions, results)
+│   │   ├── marketService.js       # Cloudflare Worker client
+│   │   ├── yahooFinance.js        # Yahoo Finance (Worker + CORS fallback)
 │   │   └── index.js
 │   │
 │   ├── utils/                     # 🔧 Pure Utility Functions
@@ -159,7 +346,8 @@ monte-carlo-app/
 │   │   └── index.js
 │   │
 │   ├── contexts/                  # 🔄 React Context Providers
-│   │   └── (future use)
+│   │   ├── AuthContext.jsx        # Auth state (isAuthenticated, user, logout)
+│   │   └── AppStateContext.jsx    # Global app state
 │   │
 │   └── workers/                   # ⚡ Web Workers
 │       ├── simulationWorker.js    # Standard Monte Carlo
@@ -525,10 +713,98 @@ const {
 
 ### Services (`src/services/`)
 
-#### `yahooFinance.js`
+#### `authService.js` - Supabase Auth Client
 
 ```javascript
-// Fetch current quote
+import { supabase, signInWithGoogle, signOut, getSession, onAuthStateChange } from './authService';
+
+// Initiate Google OAuth flow
+await signInWithGoogle();
+
+// Sign out and clear session
+await signOut();
+
+// Get current session (JWT)
+const { data: { session } } = await getSession();
+
+// Subscribe to auth state changes
+onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_IN') { /* ... */ }
+});
+
+// Direct Supabase client access for queries
+const { data } = await supabase.from('portfolios').select('*');
+```
+
+#### `portfolioService.js` - Cloud Persistence
+
+```javascript
+import {
+  getOrCreatePortfolio,
+  savePositions,
+  loadFullPortfolio,
+  saveCorrelationOverrides,
+  saveSimulationResults,
+  saveFactorResults,
+  saveOptimizationResults,
+  saveSettings
+} from './portfolioService';
+
+// Get or create user's portfolio (called on login)
+const portfolio = await getOrCreatePortfolio();
+// => { id: 'uuid', name: 'My Portfolio', cash_balance: 0, revision: 5 }
+
+// Save positions with distribution params (debounced, called on change)
+await savePositions(positions, cashBalance);
+// Deletes existing positions, inserts new ones (avoids duplicate constraint issues)
+
+// Load everything for initial sync
+const fullData = await loadFullPortfolio();
+// => { portfolio, positions, correlation, simulation, factors, optimization, settings }
+
+// Save specific result types (called after analysis runs)
+await saveCorrelationOverrides(matrix, tickers, method);
+await saveSimulationResults(results);
+await saveFactorResults(results);
+await saveOptimizationResults(results);
+await saveSettings(settings);
+```
+
+#### `marketService.js` - Cloudflare Worker Client
+
+```javascript
+import {
+  fetchPrices,
+  fetchQuotes,
+  fetchProfiles,
+  fetchExchangeRates,
+  isWorkerAvailable
+} from './marketService';
+
+// Batch fetch historical prices via Worker
+const prices = await fetchPrices(['AAPL', 'MSFT'], '1y');
+// Uses Cloudflare KV cache (4h TTL)
+
+// Batch fetch current quotes
+const quotes = await fetchQuotes(['AAPL', 'MSFT']);
+// Uses Cloudflare KV cache (15m TTL)
+
+// Batch fetch company profiles
+const profiles = await fetchProfiles(['AAPL']);
+// Uses Cloudflare KV cache (7d TTL)
+
+// Batch fetch FX rates
+const rates = await fetchExchangeRates(['EURUSD', 'GBPUSD']);
+// Uses Cloudflare KV cache (24h TTL)
+
+// Check if Worker is configured
+if (isWorkerAvailable()) { /* use Worker */ }
+```
+
+#### `yahooFinance.js` - Market Data (with Fallback)
+
+```javascript
+// Fetch current quote (Worker first, then CORS proxy fallback)
 const quote = await fetchYahooQuote('AAPL');
 // => { price: 178.50, name: 'Apple Inc.', type: 'Equity', currency: 'USD' }
 
@@ -543,6 +819,11 @@ const profile = await fetchYahooProfile('AAPL');
 // Fetch exchange rate
 const rate = await fetchExchangeRate('EUR', 'USD');
 // => 1.08
+
+// Fallback pattern (internal):
+// 1. Try Cloudflare Worker (if configured)
+// 2. Fall back to CORS proxy (allorigins.win, corsproxy.io)
+// 3. Fall back to direct Yahoo (usually blocked by CORS)
 ```
 
 ### Utils (`src/utils/`)
@@ -827,6 +1108,200 @@ Enable verbose logging by setting in console:
 ```javascript
 localStorage.setItem('debug', 'true');
 ```
+
+---
+
+## Supabase Database Schema
+
+### Tables Overview
+
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
+| `portfolios` | Portfolio metadata | user_id, name, cash_balance, revision |
+| `positions` | Stock positions | portfolio_id, symbol, shares, avg_cost, p5/p25/p50/p75/p95 |
+| `portfolio_settings` | UI preferences | portfolio_id, settings (JSONB) |
+| `correlation_overrides` | Edited correlation matrix | portfolio_id, correlation_matrix (JSONB), tickers[] |
+| `simulation_results` | Monte Carlo outputs | portfolio_id, num_paths, percentiles, var_95, cvar_95 |
+| `factor_results` | Factor analysis | portfolio_id, factor_exposures, r_squared |
+| `optimization_results` | Portfolio optimization | portfolio_id, optimal_weights, efficient_frontier |
+| `reports` | Generated report history | portfolio_id, title, generated_at |
+| `market_data_cache` | Per-user price cache | user_id, symbol, data (JSONB) |
+
+### Row Level Security (RLS)
+
+All tables have RLS enabled. Users can only access their own data:
+
+```sql
+-- Example policy on portfolios table
+CREATE POLICY "Users can CRUD own portfolios"
+  ON portfolios FOR ALL
+  USING (auth.uid() = user_id);
+
+-- Example policy on positions (via portfolio ownership)
+CREATE POLICY "Users can CRUD positions in own portfolios"
+  ON positions FOR ALL
+  USING (portfolio_id IN (
+    SELECT id FROM portfolios WHERE user_id = auth.uid()
+  ));
+```
+
+### Triggers
+
+- `update_portfolio_revision` - Auto-increments revision on portfolio update
+- `update_updated_at` - Auto-updates timestamp on record changes
+- `cleanup_old_simulation_results` - Keeps only last 10 simulation runs per portfolio
+
+### Supabase CLI Commands
+
+```bash
+# Export current schema
+npx supabase db dump --schema public -f supabase/current_schema.sql
+
+# Push local migrations to remote
+npx supabase db push
+
+# Create new migration
+npx supabase migration new <name>
+
+# Link to project (first time setup)
+npx supabase link --project-ref uoyvihrdllwslljminid
+```
+
+**Full schema file:** `supabase/current_schema.sql`
+
+---
+
+## Cloudflare Worker API
+
+### Endpoints
+
+| Endpoint | Purpose | Cache TTL |
+|----------|---------|-----------|
+| `GET /api/prices?symbols=AAPL,MSFT&range=1y` | Historical prices | 4 hours |
+| `GET /api/quotes?symbols=AAPL,MSFT` | Current quotes | 15 minutes |
+| `GET /api/profile?symbols=AAPL` | Company info | 7 days |
+| `GET /api/consensus?symbols=AAPL` | FMP analyst data | 4 hours |
+| `GET /api/fx?pairs=EURUSD,GBPUSD` | Exchange rates | 24 hours |
+
+### KV Cache Key Patterns
+
+```
+prices:v1:{symbol}:{range}    # e.g., prices:v1:AAPL:1y
+quotes:v1:{symbol}            # e.g., quotes:v1:AAPL
+profile:v1:{symbol}           # e.g., profile:v1:AAPL
+fx:v1:{base}:{quote}          # e.g., fx:v1:EUR:USD
+```
+
+### Deployment
+
+```bash
+# Deploy worker
+npx wrangler deploy
+
+# List cached keys
+npx wrangler kv key list --binding CACHE
+
+# Delete a key
+npx wrangler kv key delete --binding CACHE "prices:v1:AAPL:1y"
+```
+
+**Config:** `wrangler.toml` (KV namespace ID: 69f4d706eb4943e7af055d297cca3c78)
+
+---
+
+## Environment Variables
+
+### Local Development (`.env`)
+
+```bash
+# Supabase (required for auth + sync)
+VITE_SUPABASE_URL=https://uoyvihrdllwslljminid.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_...
+
+# Cloudflare Worker (optional - falls back to CORS proxy)
+VITE_WORKER_URL=https://monte-carlo-cache.kevinren1128.workers.dev
+
+# FMP API (optional - for analyst consensus data)
+VITE_FMP_API_KEY=<your-key>
+
+# Supabase CLI (for migrations, not VITE_ prefixed)
+SUPABASE_ACCESS_TOKEN=sbp_...
+```
+
+### Vercel Dashboard
+
+Same `VITE_*` variables configured in Vercel project settings → Environment Variables.
+
+---
+
+## Important Design Decisions
+
+### 1. Delete + Insert for Positions
+
+Instead of upserting positions, we delete all then insert fresh:
+
+```javascript
+// In portfolioService.js
+await supabase.from('positions').delete().eq('portfolio_id', id);
+await supabase.from('positions').insert(positions);
+```
+
+**Why:** Users can have the same ticker multiple times (different lots). Avoids unique constraint issues.
+
+### 2. Debounced Auto-Save (2 seconds)
+
+Changes are saved after 2 seconds of idle time, not immediately:
+
+```javascript
+// In usePortfolioSync.js
+const debouncedSave = useMemo(
+  () => debounce(savePositionsToServer, 2000),
+  []
+);
+```
+
+**Why:** Prevents excessive API calls while user is actively editing.
+
+### 3. Worker-First with Fallback
+
+Market data fetches try Cloudflare Worker first, then CORS proxy:
+
+```javascript
+// In yahooFinance.js
+const data = await fetchFromWorker('/api/prices', params);
+if (!data) {
+  data = await fetchViaCorsProxy(url);
+}
+```
+
+**Why:** Worker provides shared caching. Fallback ensures resilience if Worker is down.
+
+### 4. Revision-Based Conflict Resolution
+
+Portfolios have a `revision` counter:
+
+```javascript
+if (serverPortfolio.revision > localPortfolio.revision) {
+  useServerData();
+} else {
+  pushLocalToServer();
+}
+```
+
+**Why:** Prevents lost updates when syncing across devices.
+
+### 5. Minimal Sync Indicators
+
+Only show badge for active states (syncing spinner, synced checkmark). Don't show alarming error icons:
+
+```javascript
+// In UserMenu.jsx
+{(syncStatus === 'syncing' || syncStatus === 'synced') && (
+  <SyncBadge />
+)}
+```
+
+**Why:** Error details available in dropdown. Less visual noise.
 
 ---
 
