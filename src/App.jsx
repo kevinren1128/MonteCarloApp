@@ -2290,6 +2290,7 @@ function MonteCarloSimulator() {
             price: update.currentPrice,
             currency: update.currency,
             domesticPrice: update.domesticPrice,
+            exchangeRate: update.exchangeRate,
           };
         });
       });
@@ -2686,6 +2687,7 @@ function MonteCarloSimulator() {
             price: data.currentPrice,
             currency: data.currency || 'USD',
             domesticPrice: data.domesticPrice || data.currentPrice,
+            exchangeRate: data.exchangeRate || 1,
           };
         }
         return pos;
