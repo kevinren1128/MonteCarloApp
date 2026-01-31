@@ -1765,12 +1765,10 @@ const CorrelationTab = ({
           <div style={{
             marginTop: '16px',
             padding: '12px',
-            background: dataSource === 'worker' ? 'rgba(0, 212, 255, 0.1)' :
-                        dataSource === 'yahoo' ? 'rgba(46, 204, 113, 0.1)' :
+            background: dataSource === 'yahoo' ? 'rgba(46, 204, 113, 0.1)' :
                         dataSource === 'mixed' ? 'rgba(255, 159, 67, 0.1)' :
                         'rgba(231, 76, 60, 0.1)',
-            border: `1px solid ${dataSource === 'worker' ? 'rgba(0, 212, 255, 0.3)' :
-                                 dataSource === 'yahoo' ? 'rgba(46, 204, 113, 0.3)' :
+            border: `1px solid ${dataSource === 'yahoo' ? 'rgba(46, 204, 113, 0.3)' :
                                  dataSource === 'mixed' ? 'rgba(255, 159, 67, 0.3)' :
                                  'rgba(231, 76, 60, 0.3)'}`,
             borderRadius: '8px',
@@ -1779,19 +1777,16 @@ const CorrelationTab = ({
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
               <span style={{
                 fontSize: '16px',
-                color: dataSource === 'worker' ? '#00d4ff' :
-                       dataSource === 'yahoo' ? '#2ecc71' :
+                color: dataSource === 'yahoo' ? '#2ecc71' :
                        dataSource === 'mixed' ? '#ff9f43' : '#e74c3c'
               }}>
-                {dataSource === 'worker' ? '⚡' : dataSource === 'yahoo' ? '✓' : dataSource === 'mixed' ? '⚠' : '✗'}
+                {dataSource === 'yahoo' ? '✓' : dataSource === 'mixed' ? '⚠' : '✗'}
               </span>
               <strong style={{
-                color: dataSource === 'worker' ? '#00d4ff' :
-                       dataSource === 'yahoo' ? '#2ecc71' :
+                color: dataSource === 'yahoo' ? '#2ecc71' :
                        dataSource === 'mixed' ? '#ff9f43' : '#e74c3c'
               }}>
-                {dataSource === 'worker' ? 'Cached from Cloudflare Worker (Simple Pearson)' :
-                 dataSource === 'yahoo' ? 'Live Yahoo Finance Data (Pairwise Max Overlap)' :
+                {dataSource === 'yahoo' ? 'Live Yahoo Finance Data (Pairwise Max Overlap)' :
                  dataSource === 'mixed' ? 'Mixed Data Sources' :
                  'Mock/Synthetic Data'}
               </strong>

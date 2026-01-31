@@ -535,30 +535,22 @@ export async function fetchCorrelationMatrix(symbols, range = '5y', interval = '
  * Fetch all derived metrics in parallel
  * Returns null for any that fail, allowing local fallback
  *
- * @param {string[]} symbols - Array of ticker symbols (for betas, volatility, distributions, calendar returns)
- * @param {Object} options - Optional parameters
- * @param {string[]} options.correlationSymbols - Symbols for correlation matrix (defaults to symbols)
- * @param {string} options.correlationRange - Range for correlation (default: '5y')
- * @returns {Promise<Object>} { betas, volatility, distributions, calendarReturns, correlation }
+ * @param {string[]} symbols - Array of ticker symbols
+ * @returns {Promise<Object>} { betas, volatility, distributions, calendarReturns }
  */
-export async function fetchAllDerivedMetrics(symbols, options = {}) {
+export async function fetchAllDerivedMetrics(symbols) {
   if (!isWorkerConfigured) {
-    return { betas: null, volatility: null, distributions: null, calendarReturns: null, correlation: null };
+    return { betas: null, volatility: null, distributions: null, calendarReturns: null };
   }
 
-  const { correlationRange = '5y', correlationSymbols } = options;
-  // Use separate symbols for correlation (portfolio only, not factor ETFs)
-  const corrSymbols = correlationSymbols || symbols;
-
-  console.log(`[MarketService] Fetching all derived metrics for ${symbols.length} symbols (correlation: ${corrSymbols.length})...`);
+  console.log(`[MarketService] Fetching all derived metrics for ${symbols.length} symbols...`);
   const startTime = performance.now();
 
-  const [betas, volatility, distributions, calendarReturns, correlation] = await Promise.all([
+  const [betas, volatility, distributions, calendarReturns] = await Promise.all([
     fetchBetas(symbols).catch(() => null),
     fetchVolatility(symbols).catch(() => null),
     fetchDistributions(symbols).catch(() => null),
     fetchCalendarReturns(symbols).catch(() => null),
-    corrSymbols.length >= 2 ? fetchCorrelationMatrix(corrSymbols, correlationRange).catch(() => null) : Promise.resolve(null),
   ]);
 
   const duration = Math.round(performance.now() - startTime);
@@ -567,10 +559,9 @@ export async function fetchAllDerivedMetrics(symbols, options = {}) {
     volatility: volatility ? Object.keys(volatility).length : 0,
     distributions: distributions ? Object.keys(distributions).length : 0,
     calendarReturns: calendarReturns ? Object.keys(calendarReturns).length : 0,
-    correlation: correlation ? `${correlation.symbols?.length}x${correlation.symbols?.length}` : null,
   });
 
-  return { betas, volatility, distributions, calendarReturns, correlation };
+  return { betas, volatility, distributions, calendarReturns };
 }
 
 /**

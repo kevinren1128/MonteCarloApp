@@ -1235,8 +1235,6 @@ function MonteCarloSimulator() {
   const [isAnalyzingLag, setIsAnalyzingLag] = useState(false);
   const [useLagAdjusted, setUseLagAdjusted] = useState(false);
 
-  // Worker-computed correlation matrix (simple Pearson, used when settings match)
-  const [workerCorrelation, setWorkerCorrelation] = useState(null);
   
   // Factor Analysis state
   const [factorData, setFactorData] = useState(null); // ETF returns for factors
@@ -1651,7 +1649,6 @@ function MonteCarloSimulator() {
       setEditedCorrelation(null);
       setCorrelationMethod('shrinkage');
       setCorrelationGroups(null);
-      setWorkerCorrelation(null);
 
       // Reset factor analysis
       setFactorData(null);
@@ -2475,19 +2472,12 @@ function MonteCarloSimulator() {
       message: 'Fetching pre-computed metrics from Worker...'
     });
 
-    let workerDerivedMetrics = { betas: null, volatility: null, distributions: null, calendarReturns: null, correlation: null };
+    let workerDerivedMetrics = { betas: null, volatility: null, distributions: null, calendarReturns: null };
     if (isWorkerAvailable()) {
       try {
-        // Pass portfolio tickers (not factor ETFs) for correlation matrix
-        workerDerivedMetrics = await fetchAllDerivedMetrics(allTickers, { correlationSymbols: tickers });
+        workerDerivedMetrics = await fetchAllDerivedMetrics(allTickers);
         const workerHits = Object.values(workerDerivedMetrics).filter(v => v && Object.keys(v).length > 0).length;
-        console.log(`⚡ Worker derived metrics: ${workerHits}/5 endpoints returned data`);
-
-        // Store Worker correlation matrix for use in fetchAndComputeCorrelation
-        if (workerDerivedMetrics.correlation?.matrix) {
-          console.log(`📊 Worker correlation matrix: ${workerDerivedMetrics.correlation.symbols.length}x${workerDerivedMetrics.correlation.symbols.length}, cached: ${workerDerivedMetrics.correlation.cached}`);
-          setWorkerCorrelation(workerDerivedMetrics.correlation);
-        }
+        console.log(`⚡ Worker derived metrics: ${workerHits}/4 endpoints returned data`);
       } catch (err) {
         console.warn('Worker derived metrics fetch failed, will compute locally:', err.message);
       }
@@ -3326,7 +3316,6 @@ function MonteCarloSimulator() {
     ]);
     setCorrelationMatrix(null);
     setEditedCorrelation(null);
-    setWorkerCorrelation(null);
     setSimulationResults(null);
     setNumPaths(10000);
     setGldAsCash(false);
@@ -3981,70 +3970,6 @@ function MonteCarloSimulator() {
       console.log(`   ${ticker}: ${length} days (~${years}yr)${isLimited ? ` (limited, wanted ${targetDays})` : ''}`);
     });
 
-    // ==================== CHECK WORKER CORRELATION ====================
-    // Worker correlation is usable when:
-    // - Worker correlation exists
-    // - useEwma is false (Worker uses equal-weight correlation)
-    // - correlationMethod is 'sample' (Worker doesn't apply shrinkage)
-    // - gldAsCash is false (Worker doesn't zero out GLD correlations)
-    // - Worker symbols match current tickers (unique comparison - portfolio may have duplicates)
-    const uniqueTickers = [...new Set(tickers.map(t => t.toUpperCase()))];
-    const canUseWorkerCorrelation = workerCorrelation?.matrix &&
-      !useEwma &&
-      correlationMethod === 'sample' &&
-      !gldAsCash &&
-      workerCorrelation.symbols?.length === uniqueTickers.length &&
-      uniqueTickers.every(t => workerCorrelation.symbols.includes(t));
-
-    // Debug: log why Worker correlation can/cannot be used
-    if (!canUseWorkerCorrelation && workerCorrelation?.matrix) {
-      const reasons = [];
-      if (useEwma) reasons.push('EWMA enabled');
-      if (correlationMethod !== 'sample') reasons.push(`method=${correlationMethod}`);
-      if (gldAsCash) reasons.push('GLD-as-cash enabled');
-      if (workerCorrelation.symbols?.length !== uniqueTickers.length) {
-        reasons.push(`symbol count mismatch: Worker=${workerCorrelation.symbols?.length}, portfolio=${uniqueTickers.length}`);
-      }
-      if (!uniqueTickers.every(t => workerCorrelation.symbols?.includes(t))) {
-        const missing = uniqueTickers.filter(t => !workerCorrelation.symbols?.includes(t));
-        reasons.push(`missing symbols: ${missing.join(', ')}`);
-      }
-      console.log(`📊 Worker correlation available but not used: ${reasons.join(', ')}`);
-    } else if (!workerCorrelation?.matrix) {
-      console.log(`📊 No Worker correlation cached (run Load All first)`);
-    }
-
-    if (canUseWorkerCorrelation) {
-      console.log(`⚡ Using Worker-cached correlation matrix (${workerCorrelation.symbols.length}x${workerCorrelation.symbols.length}, portfolio has ${tickers.length} positions)`);
-
-      // Reorder Worker matrix to match current ticker order (handles duplicates - same ticker maps to same row)
-      const workerSymbols = workerCorrelation.symbols;
-      const reorderedMatrix = tickers.map((tickerI) => {
-        const iWorker = workerSymbols.indexOf(tickerI.toUpperCase());
-        return tickers.map((tickerJ) => {
-          const jWorker = workerSymbols.indexOf(tickerJ.toUpperCase());
-          return workerCorrelation.matrix[iWorker][jWorker];
-        });
-      });
-
-      setCorrelationMatrix(reorderedMatrix);
-      setEditedCorrelation(reorderedMatrix.map(row => [...row]));
-      setDataSource('worker');
-      setIsFetchingData(false);
-
-      // Clear stale indicator - correlation is now fresh
-      clearStaleTab('correlation');
-
-      showToast({
-        type: 'success',
-        title: 'Correlation from Cache',
-        message: `${reorderedMatrix.length}×${reorderedMatrix.length} matrix from Worker (cached)`,
-        duration: 3500,
-      });
-
-      return reorderedMatrix;
-    }
-
     // ==================== PAIRWISE CORRELATION WITH MAXIMUM OVERLAP ====================
     // For each pair of tickers, use as much overlapping data as available
     // This means AAPL-SPY can use 504 days even if KDEF only has 241 days
@@ -4239,7 +4164,7 @@ function MonteCarloSimulator() {
 
     // Return the correlation matrix for immediate use (avoids state timing issues)
     return corr;
-  }, [positions, gldAsCash, correlationMethod, historyTimeline, useEwma, unifiedMarketData, workerCorrelation, getDistributionParams, showToast, clearStaleTab]);
+  }, [positions, gldAsCash, correlationMethod, historyTimeline, useEwma, unifiedMarketData, getDistributionParams, showToast, clearStaleTab]);
   
   // Update correlation cell
   const updateCorrelationCell = (i, j, value) => {
