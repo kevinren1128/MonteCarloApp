@@ -21,6 +21,9 @@
  *   GET /api/consensus?symbols=AAPL                      - Analyst estimates (FMP)
  *   GET /api/fx?pairs=EURUSD,GBPUSD                      - Exchange rates (Yahoo)
  *   GET /api/correlation?symbols=AAPL,MSFT,GOOG&range=5y - Correlation matrix (6h cache)
+ *   GET /api/factor-exposures?symbols=AAPL&factors=SPY,QQQ - Factor betas (6h cache)
+ *   GET /api/snapshot?symbols=AAPL,MSFT&benchmark=SPY    - All data in one call
+ *   GET /api/optimize?symbols=AAPL,MSFT&rf=0.05         - Portfolio optimization
  *   GET ?url=...                                         - Legacy proxy mode
  *
  * USD Conversion (currency=USD):
@@ -45,6 +48,9 @@ const CACHE_TTLS = {
   distribution: 12 * 60 * 60, // 12 hours (expensive to compute, stable)
   calendarReturns: 24 * 60 * 60, // 24 hours (only changes end of day)
   correlation: 6 * 60 * 60, // 6 hours (depends on price data)
+  factorExposures: 6 * 60 * 60, // 6 hours (factor betas are relatively stable)
+  snapshot: 15 * 60, // 15 minutes (aggregated data, short TTL)
+  optimization: 6 * 60 * 60, // 6 hours (expensive computation, relatively stable)
 };
 
 // ============================================
@@ -137,6 +143,15 @@ export default {
       } else if (path.startsWith('/api/correlation')) {
         handler = 'correlation';
         response = await handleCorrelation(url, env, requestId);
+      } else if (path.startsWith('/api/factor-exposures')) {
+        handler = 'factor-exposures';
+        response = await handleFactorExposures(url, env, requestId);
+      } else if (path.startsWith('/api/snapshot')) {
+        handler = 'snapshot';
+        response = await handleSnapshot(url, env, requestId);
+      } else if (path.startsWith('/api/optimize')) {
+        handler = 'optimize';
+        response = await handleOptimize(url, env, requestId);
       } else if (url.searchParams.has('url')) {
         handler = 'legacy';
         response = await handleLegacyProxy(url, env, requestId);
@@ -144,11 +159,11 @@ export default {
         handler = 'health';
         response = jsonResponse({
           status: 'ok',
-          version: '2.3.0',
+          version: '2.6.0',
           endpoints: [
             '/api/prices', '/api/quotes', '/api/profile', '/api/consensus', '/api/fx',
             '/api/beta', '/api/volatility', '/api/distribution', '/api/calendar-returns',
-            '/api/correlation'
+            '/api/correlation', '/api/factor-exposures', '/api/snapshot', '/api/optimize'
           ],
           kvBound: !!env.CACHE,
         });
@@ -1413,6 +1428,623 @@ async function handleCorrelation(url, env, requestId) {
     cached: false,
     source: 'computed'
   });
+}
+
+/**
+ * Factor exposures (betas against multiple factor ETFs)
+ * GET /api/factor-exposures?symbols=AAPL,MSFT&factors=SPY,QQQ,IWM&range=1y
+ *
+ * Returns beta of each symbol against each factor ETF.
+ * Reuses cached individual betas when available.
+ */
+async function handleFactorExposures(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const factors = (url.searchParams.get('factors') || 'SPY').split(',').filter(Boolean);
+  const range = url.searchParams.get('range') || '1y';
+  const interval = url.searchParams.get('interval') || '1d';
+
+  if (symbols.length === 0) {
+    return jsonResponse({ error: 'symbols parameter required' }, 400);
+  }
+
+  log.info('Computing factor exposures', { requestId, symbols, factors, range });
+
+  // Normalize
+  const normalizedSymbols = symbols.map(s => s.toUpperCase());
+  const normalizedFactors = factors.map(f => f.toUpperCase());
+
+  // Check for full result cache (by sorted symbol+factor combination)
+  const sortedSymbols = [...normalizedSymbols].sort();
+  const sortedFactors = [...normalizedFactors].sort();
+  const fullCacheKey = `factorexp:v1:${range}:${interval}:${sortedSymbols.join('|')}:${sortedFactors.join('|')}`;
+
+  const cachedFull = await getCached(env, fullCacheKey, requestId);
+  if (cachedFull) {
+    log.info('Factor exposures from cache', { requestId, symbolCount: symbols.length, factorCount: factors.length });
+    return jsonResponse({ ...cachedFull, cached: true, source: 'kv' });
+  }
+
+  // Fetch price data for all symbols and factors
+  const allTickers = [...new Set([...normalizedSymbols, ...normalizedFactors])];
+  const priceDataMap = {};
+
+  const fetchPromises = allTickers.map(async (ticker) => {
+    const priceKey = `prices:v1:${ticker}:${range}:${interval}`;
+    let priceData = await getCached(env, priceKey, requestId);
+    if (!priceData) {
+      priceData = await fetchYahooChart(ticker, range, interval, requestId);
+      if (priceData) {
+        await setCache(env, priceKey, priceData, CACHE_TTLS.prices, requestId);
+      }
+    }
+    priceDataMap[ticker] = priceData;
+  });
+
+  await Promise.all(fetchPromises);
+
+  // Compute returns for all tickers
+  const returnsMap = {};
+  for (const ticker of allTickers) {
+    const priceData = priceDataMap[ticker];
+    if (priceData?.prices?.length >= 30) {
+      returnsMap[ticker] = computeDailyReturns(priceData.prices);
+    }
+  }
+
+  // Check factor data availability
+  for (const factor of normalizedFactors) {
+    if (!returnsMap[factor]?.length) {
+      return jsonResponse({
+        error: `Insufficient data for factor ${factor}`,
+        factor,
+        minRequired: 30
+      }, 400);
+    }
+  }
+
+  // Compute exposures for each symbol against each factor
+  const exposures = {};
+  const rSquared = {};
+  const cacheStats = { betaHits: 0, betaMisses: 0 };
+
+  for (const symbol of normalizedSymbols) {
+    const symbolReturns = returnsMap[symbol];
+    if (!symbolReturns?.length || symbolReturns.length < 30) {
+      exposures[symbol] = { error: 'Insufficient data' };
+      continue;
+    }
+
+    exposures[symbol] = {};
+    let totalSS = 0;
+    let residualSS = 0;
+
+    // Compute mean return for R² calculation
+    const n = symbolReturns.length;
+    const meanReturn = symbolReturns.reduce((a, b) => a + b, 0) / n;
+    totalSS = symbolReturns.reduce((a, r) => a + (r - meanReturn) ** 2, 0);
+
+    for (const factor of normalizedFactors) {
+      // Check individual beta cache
+      const betaCacheKey = `beta:v1:${symbol}:${factor}:${range}:${interval}`;
+      let betaData = await getCached(env, betaCacheKey, requestId);
+
+      if (betaData?.beta !== undefined) {
+        exposures[symbol][factor] = betaData.beta;
+        cacheStats.betaHits++;
+      } else {
+        // Compute beta
+        const factorReturns = returnsMap[factor];
+        const { beta, correlation } = computeBetaCorrelation(symbolReturns, factorReturns);
+        exposures[symbol][factor] = beta;
+        cacheStats.betaMisses++;
+
+        // Cache individual beta
+        await setCache(env, betaCacheKey, {
+          symbol,
+          benchmark: factor,
+          beta,
+          correlation,
+          range,
+          interval,
+          asOf: new Date().toISOString().split('T')[0]
+        }, CACHE_TTLS.beta, requestId);
+      }
+    }
+
+    // Simple R² approximation using market factor (first factor, usually SPY)
+    const marketFactor = normalizedFactors[0];
+    const marketReturns = returnsMap[marketFactor];
+    if (marketReturns && exposures[symbol][marketFactor] !== null) {
+      const beta = exposures[symbol][marketFactor];
+      const len = Math.min(symbolReturns.length, marketReturns.length);
+      const sr = symbolReturns.slice(-len);
+      const mr = marketReturns.slice(-len);
+      const meanMr = mr.reduce((a, b) => a + b, 0) / len;
+
+      residualSS = 0;
+      for (let i = 0; i < len; i++) {
+        const predicted = meanReturn + beta * (mr[i] - meanMr);
+        residualSS += (sr[i] - predicted) ** 2;
+      }
+      rSquared[symbol] = totalSS > 0 ? Math.round((1 - residualSS / totalSS) * 1000) / 1000 : 0;
+    }
+  }
+
+  const result = {
+    symbols: normalizedSymbols,
+    factors: normalizedFactors,
+    exposures,
+    rSquared,
+    range,
+    interval,
+    asOf: new Date().toISOString().split('T')[0]
+  };
+
+  // Cache the full result
+  await setCache(env, fullCacheKey, result, CACHE_TTLS.factorExposures, requestId);
+
+  log.info('Factor exposures complete', {
+    requestId,
+    symbolCount: symbols.length,
+    factorCount: factors.length,
+    ...cacheStats
+  });
+
+  return jsonResponse({ ...result, cached: false, source: 'computed' });
+}
+
+/**
+ * Portfolio snapshot - all data in one call
+ * GET /api/snapshot?symbols=AAPL,MSFT&benchmark=SPY&currency=USD
+ *
+ * Returns: quotes, profiles, volatility, beta, and current prices
+ * Reduces multiple round-trips to a single request.
+ */
+async function handleSnapshot(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const benchmark = url.searchParams.get('benchmark') || 'SPY';
+  const range = url.searchParams.get('range') || '1y';
+  const targetCurrency = url.searchParams.get('currency')?.toUpperCase();
+
+  if (symbols.length === 0) {
+    return jsonResponse({ error: 'symbols parameter required' }, 400);
+  }
+
+  log.info('Building snapshot', { requestId, symbols, benchmark, range, targetCurrency });
+
+  const normalizedSymbols = symbols.map(s => s.toUpperCase());
+  const allTickers = [...new Set([...normalizedSymbols, benchmark])];
+
+  // Fetch all data in parallel
+  const [quotesData, profilesData, pricesData] = await Promise.all([
+    // Quotes
+    (async () => {
+      const results = {};
+      await Promise.all(allTickers.map(async (symbol) => {
+        const cacheKey = `quotes:v1:${symbol}`;
+        let data = await getCached(env, cacheKey, requestId);
+        if (!data) {
+          data = await fetchYahooQuote(symbol, requestId);
+          if (data) {
+            await setCache(env, cacheKey, data, CACHE_TTLS.quotes, requestId);
+          }
+        }
+        results[symbol] = data;
+      }));
+      return results;
+    })(),
+
+    // Profiles
+    (async () => {
+      const results = {};
+      await Promise.all(normalizedSymbols.map(async (symbol) => {
+        const cacheKey = `profile:v1:${symbol}`;
+        let data = await getCached(env, cacheKey, requestId);
+        if (!data) {
+          data = await fetchYahooProfile(symbol, requestId);
+          if (data) {
+            await setCache(env, cacheKey, data, CACHE_TTLS.profile, requestId);
+          }
+        }
+        results[symbol] = data;
+      }));
+      return results;
+    })(),
+
+    // Prices (for volatility and beta calculations)
+    (async () => {
+      const results = {};
+      await Promise.all(allTickers.map(async (symbol) => {
+        const cacheKey = `prices:v1:${symbol}:${range}:1d`;
+        let data = await getCached(env, cacheKey, requestId);
+        if (!data) {
+          data = await fetchYahooChart(symbol, range, '1d', requestId);
+          if (data) {
+            await setCache(env, cacheKey, data, CACHE_TTLS.prices, requestId);
+          }
+        }
+        results[symbol] = data;
+      }));
+      return results;
+    })()
+  ]);
+
+  // Compute volatility and beta from prices
+  const volatility = {};
+  const beta = {};
+  const benchmarkReturns = pricesData[benchmark]?.prices
+    ? computeDailyReturns(pricesData[benchmark].prices)
+    : [];
+
+  for (const symbol of normalizedSymbols) {
+    const priceData = pricesData[symbol];
+    if (priceData?.prices?.length >= 30) {
+      const returns = computeDailyReturns(priceData.prices);
+
+      // Volatility
+      volatility[symbol] = {
+        annualizedVol: computeAnnualizedVolatility(returns),
+        ...computeReturns(priceData.prices, priceData.timestamps)
+      };
+
+      // Beta vs benchmark
+      if (benchmarkReturns.length >= 30) {
+        const { beta: b, correlation } = computeBetaCorrelation(returns, benchmarkReturns);
+        beta[symbol] = { beta: b, correlation, benchmark };
+      }
+    }
+  }
+
+  // Apply currency conversion to quotes if requested
+  let fxSummary = null;
+  if (targetCurrency === 'USD') {
+    const currenciesNeeded = new Set();
+    for (const [symbol, quote] of Object.entries(quotesData)) {
+      if (quote?.currency && quote.currency !== 'USD') {
+        currenciesNeeded.add(quote.currency);
+      }
+    }
+
+    if (currenciesNeeded.size > 0) {
+      fxSummary = {};
+      const fxRates = { USD: 1 };
+
+      await Promise.all([...currenciesNeeded].map(async (currency) => {
+        const pair = `${currency}USD`;
+        const fxCacheKey = `fx:v1:${currency}:USD`;
+        let rate = await getCached(env, fxCacheKey, requestId);
+        if (!rate) {
+          const fxData = await fetchYahooFxRate(currency, 'USD', requestId);
+          if (fxData) {
+            rate = fxData.rate;
+            await setCache(env, fxCacheKey, rate, CACHE_TTLS.fx, requestId);
+          }
+        }
+        if (rate) {
+          fxRates[currency] = typeof rate === 'object' ? rate.rate || rate : rate;
+          fxSummary[pair] = fxRates[currency];
+        }
+      }));
+
+      // Convert quotes to USD
+      for (const [symbol, quote] of Object.entries(quotesData)) {
+        if (quote?.price && quote.currency && quote.currency !== 'USD') {
+          const rate = fxRates[quote.currency] || 1;
+          quote.localPrice = quote.price;
+          quote.localCurrency = quote.currency;
+          quote.price = quote.price * rate;
+          quote.currency = 'USD';
+          quote.fxRate = rate;
+        }
+      }
+    }
+  }
+
+  const result = {
+    symbols: normalizedSymbols,
+    quotes: quotesData,
+    profiles: profilesData,
+    volatility,
+    beta,
+    benchmark,
+    range,
+    asOf: new Date().toISOString()
+  };
+
+  if (fxSummary) {
+    result._fx = fxSummary;
+  }
+
+  log.info('Snapshot complete', {
+    requestId,
+    symbolCount: symbols.length,
+    hasQuotes: Object.keys(quotesData).filter(k => quotesData[k]).length,
+    hasProfiles: Object.keys(profilesData).filter(k => profilesData[k]).length,
+    hasVolatility: Object.keys(volatility).length,
+    hasBeta: Object.keys(beta).length
+  });
+
+  return jsonResponse(result);
+}
+
+/**
+ * Portfolio optimization
+ * GET /api/optimize?symbols=AAPL,MSFT,GOOG&returns=0.12,0.10,0.15&vols=0.25,0.20,0.30&range=1y
+ *
+ * Computes:
+ * - Minimum variance portfolio
+ * - Maximum Sharpe ratio portfolio
+ * - Risk parity weights
+ *
+ * If returns/vols not provided, computes from historical prices.
+ */
+async function handleOptimize(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const returnsParam = url.searchParams.get('returns');
+  const volsParam = url.searchParams.get('vols');
+  const range = url.searchParams.get('range') || '1y';
+  const riskFreeRate = parseFloat(url.searchParams.get('rf') || '0.05');
+
+  if (symbols.length < 2) {
+    return jsonResponse({ error: 'At least 2 symbols required' }, 400);
+  }
+
+  log.info('Running optimization', { requestId, symbols, range, riskFreeRate });
+
+  const n = symbols.length;
+  const normalizedSymbols = symbols.map(s => s.toUpperCase());
+
+  // Check cache
+  const sortedSymbols = [...normalizedSymbols].sort();
+  const cacheKey = `opt:v1:${range}:${sortedSymbols.join('|')}`;
+  const cached = await getCached(env, cacheKey, requestId);
+  if (cached && !returnsParam && !volsParam) {
+    return jsonResponse({ ...cached, cached: true, source: 'kv' });
+  }
+
+  // Fetch price data
+  const priceDataMap = {};
+  await Promise.all(normalizedSymbols.map(async (symbol) => {
+    const priceKey = `prices:v1:${symbol}:${range}:1d`;
+    let data = await getCached(env, priceKey, requestId);
+    if (!data) {
+      data = await fetchYahooChart(symbol, range, '1d', requestId);
+      if (data) {
+        await setCache(env, priceKey, data, CACHE_TTLS.prices, requestId);
+      }
+    }
+    priceDataMap[symbol] = data;
+  }));
+
+  // Compute returns and build covariance matrix
+  const returnsMap = {};
+  const volMap = {};
+  let minLength = Infinity;
+
+  for (const symbol of normalizedSymbols) {
+    const priceData = priceDataMap[symbol];
+    if (!priceData?.prices?.length || priceData.prices.length < 30) {
+      return jsonResponse({ error: `Insufficient data for ${symbol}` }, 400);
+    }
+    const returns = computeDailyReturns(priceData.prices);
+    returnsMap[symbol] = returns;
+    volMap[symbol] = computeAnnualizedVolatility(returns);
+    minLength = Math.min(minLength, returns.length);
+  }
+
+  // Align returns
+  for (const symbol of normalizedSymbols) {
+    returnsMap[symbol] = returnsMap[symbol].slice(-minLength);
+  }
+
+  // Expected returns and volatilities (use provided or computed)
+  const expectedReturns = returnsParam
+    ? returnsParam.split(',').map(parseFloat)
+    : normalizedSymbols.map(s => {
+        const returns = returnsMap[s];
+        const meanDaily = returns.reduce((a, b) => a + b, 0) / returns.length;
+        return meanDaily * 252; // Annualize
+      });
+
+  const volatilities = volsParam
+    ? volsParam.split(',').map(parseFloat)
+    : normalizedSymbols.map(s => volMap[s]);
+
+  // Build correlation matrix
+  const corrMatrix = [];
+  for (let i = 0; i < n; i++) {
+    const row = [];
+    for (let j = 0; j < n; j++) {
+      if (i === j) {
+        row.push(1);
+      } else if (j < i) {
+        row.push(corrMatrix[j][i]);
+      } else {
+        const corr = computePearsonCorrelation(returnsMap[normalizedSymbols[i]], returnsMap[normalizedSymbols[j]]);
+        row.push(corr);
+      }
+    }
+    corrMatrix.push(row);
+  }
+
+  // Build covariance matrix: Σ_ij = σ_i * σ_j * ρ_ij
+  const covMatrix = [];
+  for (let i = 0; i < n; i++) {
+    const row = [];
+    for (let j = 0; j < n; j++) {
+      row.push(volatilities[i] * volatilities[j] * corrMatrix[i][j]);
+    }
+    covMatrix.push(row);
+  }
+
+  // Add small ridge term for stability
+  const ridge = 0.0001;
+  for (let i = 0; i < n; i++) {
+    covMatrix[i][i] += ridge;
+  }
+
+  // 1. Minimum Variance Portfolio: w ∝ Σ⁻¹·1
+  const ones = Array(n).fill(1);
+  const invCovOnes = solveLinearSystem(covMatrix, ones);
+  const sumInvCovOnes = invCovOnes.reduce((a, b) => a + b, 0);
+  const minVarWeights = invCovOnes.map(w => w / sumInvCovOnes);
+
+  // 2. Maximum Sharpe Portfolio: w ∝ Σ⁻¹·(μ - rf)
+  const excessReturns = expectedReturns.map(r => r - riskFreeRate);
+  const invCovExcess = solveLinearSystem(covMatrix, excessReturns);
+  const sumInvCovExcess = invCovExcess.reduce((a, b) => a + b, 0);
+  const maxSharpeWeights = sumInvCovExcess !== 0
+    ? invCovExcess.map(w => w / sumInvCovExcess)
+    : minVarWeights; // Fallback if all excess returns are 0
+
+  // 3. Risk Parity: equal risk contribution
+  const riskParityWeights = computeRiskParityWeights(covMatrix, n);
+
+  // Compute portfolio stats
+  const computePortfolioStats = (weights) => {
+    let portReturn = 0;
+    let portVar = 0;
+    for (let i = 0; i < n; i++) {
+      portReturn += weights[i] * expectedReturns[i];
+      for (let j = 0; j < n; j++) {
+        portVar += weights[i] * weights[j] * covMatrix[i][j];
+      }
+    }
+    const portVol = Math.sqrt(portVar);
+    const sharpe = portVol > 0 ? (portReturn - riskFreeRate) / portVol : 0;
+    return {
+      return: Math.round(portReturn * 10000) / 10000,
+      volatility: Math.round(portVol * 10000) / 10000,
+      sharpe: Math.round(sharpe * 100) / 100
+    };
+  };
+
+  const result = {
+    symbols: normalizedSymbols,
+    expectedReturns: expectedReturns.map(r => Math.round(r * 10000) / 10000),
+    volatilities: volatilities.map(v => Math.round(v * 10000) / 10000),
+    riskFreeRate,
+    minVariance: {
+      weights: minVarWeights.map(w => Math.round(w * 10000) / 10000),
+      ...computePortfolioStats(minVarWeights)
+    },
+    maxSharpe: {
+      weights: maxSharpeWeights.map(w => Math.round(w * 10000) / 10000),
+      ...computePortfolioStats(maxSharpeWeights)
+    },
+    riskParity: {
+      weights: riskParityWeights.map(w => Math.round(w * 10000) / 10000),
+      ...computePortfolioStats(riskParityWeights)
+    },
+    correlationMatrix: corrMatrix.map(row => row.map(v => Math.round(v * 1000) / 1000)),
+    range,
+    pointsUsed: minLength,
+    asOf: new Date().toISOString().split('T')[0]
+  };
+
+  // Cache if using computed values
+  if (!returnsParam && !volsParam) {
+    await setCache(env, cacheKey, result, CACHE_TTLS.optimization, requestId);
+  }
+
+  log.info('Optimization complete', { requestId, symbolCount: n });
+  return jsonResponse({ ...result, cached: false, source: 'computed' });
+}
+
+/**
+ * Solve linear system Ax = b using Gaussian elimination with partial pivoting
+ */
+function solveLinearSystem(A, b) {
+  const n = A.length;
+  // Create augmented matrix
+  const aug = A.map((row, i) => [...row, b[i]]);
+
+  // Forward elimination with partial pivoting
+  for (let col = 0; col < n; col++) {
+    // Find pivot
+    let maxRow = col;
+    for (let row = col + 1; row < n; row++) {
+      if (Math.abs(aug[row][col]) > Math.abs(aug[maxRow][col])) {
+        maxRow = row;
+      }
+    }
+    [aug[col], aug[maxRow]] = [aug[maxRow], aug[col]];
+
+    if (Math.abs(aug[col][col]) < 1e-10) continue; // Singular
+
+    // Eliminate
+    for (let row = col + 1; row < n; row++) {
+      const factor = aug[row][col] / aug[col][col];
+      for (let j = col; j <= n; j++) {
+        aug[row][j] -= factor * aug[col][j];
+      }
+    }
+  }
+
+  // Back substitution
+  const x = Array(n).fill(0);
+  for (let i = n - 1; i >= 0; i--) {
+    let sum = aug[i][n];
+    for (let j = i + 1; j < n; j++) {
+      sum -= aug[i][j] * x[j];
+    }
+    x[i] = Math.abs(aug[i][i]) > 1e-10 ? sum / aug[i][i] : 0;
+  }
+
+  return x;
+}
+
+/**
+ * Compute risk parity weights using iterative algorithm
+ * Target: each asset contributes equally to portfolio risk
+ */
+function computeRiskParityWeights(covMatrix, n, maxIter = 100, tol = 1e-6) {
+  // Start with equal weights
+  let weights = Array(n).fill(1 / n);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    // Compute marginal risk contribution
+    const sigmaW = [];
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      for (let j = 0; j < n; j++) {
+        sum += covMatrix[i][j] * weights[j];
+      }
+      sigmaW.push(sum);
+    }
+
+    const portVar = weights.reduce((acc, w, i) => acc + w * sigmaW[i], 0);
+    const portVol = Math.sqrt(portVar);
+
+    // Risk contribution: RC_i = w_i * (Σw)_i / σ_p
+    const riskContrib = weights.map((w, i) => w * sigmaW[i] / portVol);
+    const totalRisk = riskContrib.reduce((a, b) => a + b, 0);
+    const targetRisk = totalRisk / n; // Equal risk for each asset
+
+    // Update weights to equalize risk contributions
+    const newWeights = [];
+    let sumNewWeights = 0;
+    for (let i = 0; i < n; i++) {
+      // Adjust weight inversely proportional to marginal risk
+      const marginalRisk = sigmaW[i] / portVol;
+      const newW = marginalRisk > 0 ? targetRisk / marginalRisk : weights[i];
+      newWeights.push(newW);
+      sumNewWeights += newW;
+    }
+
+    // Normalize
+    for (let i = 0; i < n; i++) {
+      newWeights[i] /= sumNewWeights;
+    }
+
+    // Check convergence
+    const maxChange = Math.max(...weights.map((w, i) => Math.abs(w - newWeights[i])));
+    weights = newWeights;
+
+    if (maxChange < tol) break;
+  }
+
+  return weights;
 }
 
 // ============================================

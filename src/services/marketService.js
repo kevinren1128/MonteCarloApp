@@ -503,6 +503,121 @@ export async function fetchAllDerivedMetrics(symbols) {
   return { betas, volatility, distributions, calendarReturns };
 }
 
+/**
+ * Fetch factor exposures (betas against multiple factor ETFs)
+ *
+ * @param {string[]} symbols - Array of portfolio ticker symbols
+ * @param {string[]} factors - Array of factor ETF symbols (default: SPY)
+ * @param {string} range - Time range (default: 1y)
+ * @returns {Promise<Object|null>} { symbols, factors, exposures, rSquared } or null
+ */
+export async function fetchFactorExposures(symbols, factors = ['SPY'], range = '1y') {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping factor exposures fetch');
+    return null;
+  }
+
+  if (symbols.length === 0) {
+    return null;
+  }
+
+  const data = await fetchFromWorker('/api/factor-exposures', {
+    symbols: symbols.join(','),
+    factors: factors.join(','),
+    range,
+  });
+
+  if (data?.exposures) {
+    console.log(`[MarketService] Fetched factor exposures for ${symbols.length} symbols x ${factors.length} factors`);
+    return data;
+  }
+
+  return null;
+}
+
+/**
+ * Fetch portfolio snapshot (all data in one call)
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @param {Object} options - Additional options
+ * @param {string} options.benchmark - Benchmark symbol (default: SPY)
+ * @param {string} options.range - Time range (default: 1y)
+ * @param {string} options.currency - Target currency (optional, 'USD' for conversion)
+ * @returns {Promise<Object|null>} { symbols, quotes, profiles, volatility, beta } or null
+ */
+export async function fetchSnapshot(symbols, options = {}) {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping snapshot fetch');
+    return null;
+  }
+
+  const { benchmark = 'SPY', range = '1y', currency } = options;
+
+  const params = {
+    symbols: symbols.join(','),
+    benchmark,
+    range,
+  };
+  if (currency) {
+    params.currency = currency;
+  }
+
+  const data = await fetchFromWorker('/api/snapshot', params);
+
+  if (data?.quotes) {
+    console.log(`[MarketService] Fetched snapshot for ${symbols.length} symbols`);
+    return data;
+  }
+
+  return null;
+}
+
+/**
+ * Fetch portfolio optimization results
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @param {Object} options - Additional options
+ * @param {number[]} options.returns - Expected annual returns (optional, computed if not provided)
+ * @param {number[]} options.vols - Annual volatilities (optional, computed if not provided)
+ * @param {string} options.range - Time range for historical data (default: 1y)
+ * @param {number} options.riskFreeRate - Risk-free rate (default: 0.05)
+ * @returns {Promise<Object|null>} { minVariance, maxSharpe, riskParity, ... } or null
+ */
+export async function fetchOptimization(symbols, options = {}) {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping optimization fetch');
+    return null;
+  }
+
+  if (symbols.length < 2) {
+    console.log('[MarketService] Need at least 2 symbols for optimization');
+    return null;
+  }
+
+  const { returns, vols, range = '1y', riskFreeRate = 0.05 } = options;
+
+  const params = {
+    symbols: symbols.join(','),
+    range,
+    rf: String(riskFreeRate),
+  };
+  if (returns) {
+    params.returns = returns.join(',');
+  }
+  if (vols) {
+    params.vols = vols.join(',');
+  }
+
+  const data = await fetchFromWorker('/api/optimize', params);
+
+  if (data?.minVariance) {
+    console.log(`[MarketService] Fetched optimization for ${symbols.length} symbols`);
+    return data;
+  }
+
+  return null;
+}
+
 export default {
   isWorkerAvailable,
   fetchPrices,
@@ -518,4 +633,8 @@ export default {
   fetchCalendarReturns,
   fetchCorrelationMatrix,
   fetchAllDerivedMetrics,
+  // Advanced endpoints
+  fetchFactorExposures,
+  fetchSnapshot,
+  fetchOptimization,
 };
