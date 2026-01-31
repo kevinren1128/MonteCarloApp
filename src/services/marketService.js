@@ -536,21 +536,26 @@ export async function fetchCorrelationMatrix(symbols, range = '5y', interval = '
  * Returns null for any that fail, allowing local fallback
  *
  * @param {string[]} symbols - Array of ticker symbols
- * @returns {Promise<Object>} { betas, volatility, distributions, calendarReturns }
+ * @param {Object} options - Optional parameters
+ * @param {string} options.correlationRange - Range for correlation (default: '5y')
+ * @returns {Promise<Object>} { betas, volatility, distributions, calendarReturns, correlation }
  */
-export async function fetchAllDerivedMetrics(symbols) {
+export async function fetchAllDerivedMetrics(symbols, options = {}) {
   if (!isWorkerConfigured) {
-    return { betas: null, volatility: null, distributions: null, calendarReturns: null };
+    return { betas: null, volatility: null, distributions: null, calendarReturns: null, correlation: null };
   }
+
+  const { correlationRange = '5y' } = options;
 
   console.log(`[MarketService] Fetching all derived metrics for ${symbols.length} symbols...`);
   const startTime = performance.now();
 
-  const [betas, volatility, distributions, calendarReturns] = await Promise.all([
+  const [betas, volatility, distributions, calendarReturns, correlation] = await Promise.all([
     fetchBetas(symbols).catch(() => null),
     fetchVolatility(symbols).catch(() => null),
     fetchDistributions(symbols).catch(() => null),
     fetchCalendarReturns(symbols).catch(() => null),
+    symbols.length >= 2 ? fetchCorrelationMatrix(symbols, correlationRange).catch(() => null) : Promise.resolve(null),
   ]);
 
   const duration = Math.round(performance.now() - startTime);
@@ -559,9 +564,10 @@ export async function fetchAllDerivedMetrics(symbols) {
     volatility: volatility ? Object.keys(volatility).length : 0,
     distributions: distributions ? Object.keys(distributions).length : 0,
     calendarReturns: calendarReturns ? Object.keys(calendarReturns).length : 0,
+    correlation: correlation ? `${correlation.symbols?.length}x${correlation.symbols?.length}` : null,
   });
 
-  return { betas, volatility, distributions, calendarReturns };
+  return { betas, volatility, distributions, calendarReturns, correlation };
 }
 
 /**
