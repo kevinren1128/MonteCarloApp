@@ -792,7 +792,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: '24px', fontWeight: '700', color: COLORS.green, lineHeight: 1 }}>
-                +{((bestSwap.deltaMetrics?.deltaMCSharpe || 0) * 100).toFixed(2)}%
+                {(bestSwap.deltaMetrics?.deltaMCSharpe || 0) >= 0 ? '+' : ''}{(bestSwap.deltaMetrics?.deltaMCSharpe || 0).toFixed(3)}
               </div>
               <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>ΔSharpe (MC)</div>
             </div>
@@ -800,7 +800,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
           
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginTop: '14px' }}>
             {[
-              { label: 'ΔSharpe', value: ((bestSwap.deltaMetrics?.deltaMCSharpe || 0) * 100).toFixed(3), unit: '%', positive: true },
+              { label: 'ΔSharpe', value: (bestSwap.deltaMetrics?.deltaMCSharpe || 0).toFixed(3), unit: '', positive: true },
               { label: 'ΔP(Loss)', value: (-(bestSwap.deltaMetrics?.deltaPLoss || 0) * 100).toFixed(2), unit: '%', positive: -(bestSwap.deltaMetrics?.deltaPLoss || 0) > 0 },
               { label: 'ΔVaR 5%', value: ((bestSwap.deltaMetrics?.deltaVaR5 || 0) * 100).toFixed(2), unit: '%', positive: (bestSwap.deltaMetrics?.deltaVaR5 || 0) > 0 },
               { label: 'ΔMedian', value: ((bestSwap.deltaMetrics?.deltaMedian || 0) * 100).toFixed(2), unit: '%', positive: (bestSwap.deltaMetrics?.deltaMedian || 0) > 0 },
@@ -870,7 +870,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
                   <span style={{ fontSize: '9px', color: '#666' }}>ΔSharpe</span>
                   <span style={{ fontSize: '12px', fontWeight: '700', color: isGood ? COLORS.green : COLORS.red, fontFamily: 'monospace' }}>
-                    {isGood ? '+' : ''}{(deltaSharpe * 100).toFixed(2)}%
+                    {isGood ? '+' : ''}{deltaSharpe.toFixed(3)}
                   </span>
                 </div>
                 <div style={{ height: '3px', background: 'rgba(0,0,0,0.3)', borderRadius: '2px', overflow: 'hidden' }}>
@@ -1035,7 +1035,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                         fontFamily: 'monospace',
                         textShadow: isGood ? '0 0 10px rgba(46, 204, 113, 0.3)' : 'none',
                       }}>
-                        {isGood ? '+' : ''}{(deltaSharpe * 100).toFixed(2)}%
+                        {isGood ? '+' : ''}{deltaSharpe.toFixed(3)}
                       </span>
                     </div>
                     
@@ -1186,7 +1186,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                           minWidth: '50px',
                           textAlign: 'right',
                         }}>
-                          {isGood ? '+' : ''}{(deltaSharpe * 100).toFixed(2)}%
+                          {isGood ? '+' : ''}{deltaSharpe.toFixed(3)}
                         </span>
                       </div>
                     </div>
@@ -1654,7 +1654,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
             )}
           </div>
           <div style={{ fontSize: '10px', color: '#666', marginTop: '4px' }}>
-            ΔSharpe × 100 from 1% swap between portfolio positions. Hover cells for details.
+            ΔSharpe from 1% swap between portfolio positions. Hover cells for details.
             {isAnalytical && <span style={{ color: '#888', marginLeft: '4px' }}>(Run analysis for MC validation)</span>}
           </div>
         </div>
@@ -1690,7 +1690,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
           }}>
             <span style={{ color: '#666' }}>Max Δ:</span>
             <span style={{ color: COLORS.cyan, fontWeight: '600', marginLeft: '4px' }}>
-              {bestSwap ? `+${(bestSwap.deltaSharpe * 100).toFixed(2)}` : '-'}
+              {bestSwap ? `+${bestSwap.deltaSharpe.toFixed(3)}` : '-'}
             </span>
           </div>
         </div>
@@ -1717,7 +1717,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
               Sell {bestSwap.sell} → Buy {bestSwap.buy}
             </div>
             <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-              ΔSharpe: <span style={{ color: COLORS.green }}>+{(bestSwap.deltaSharpe * 100).toFixed(2)}</span>
+              ΔSharpe: <span style={{ color: COLORS.green }}>+{bestSwap.deltaSharpe.toFixed(3)}</span>
               <span style={{ margin: '0 6px', color: '#444' }}>|</span>
               ΔVol: <span style={{ color: bestSwap.deltaVol < 0 ? COLORS.green : COLORS.orange }}>
                 {(bestSwap.deltaVol * 100).toFixed(2)}%
@@ -1738,7 +1738,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
               Sell {worstSwap.sell} → Buy {worstSwap.buy}
             </div>
             <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-              ΔSharpe: <span style={{ color: COLORS.red }}>{(worstSwap.deltaSharpe * 100).toFixed(2)}</span>
+              ΔSharpe: <span style={{ color: COLORS.red }}>{worstSwap.deltaSharpe.toFixed(3)}</span>
               <span style={{ margin: '0 6px', color: '#444' }}>|</span>
               ΔVol: <span style={{ color: worstSwap.deltaVol > 0 ? COLORS.red : COLORS.green }}>
                 {worstSwap.deltaVol > 0 ? '+' : ''}{(worstSwap.deltaVol * 100).toFixed(2)}%
@@ -1878,9 +1878,9 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
                       color: delta > 0 ? COLORS.green : delta < 0 ? COLORS.red : '#888',
                       fontFamily: 'monospace',
                     }}>
-                      {delta > 0 ? '+' : ''}{(delta * 100).toFixed(3)}
+                      {delta > 0 ? '+' : ''}{delta.toFixed(3)}
                     </div>
-                    <div style={{ fontSize: '8px', color: '#666', marginTop: '2px' }}>ΔSharpe × 100</div>
+                    <div style={{ fontSize: '8px', color: '#666', marginTop: '2px' }}>ΔSharpe</div>
                   </div>
                   
                   <div style={{ 
