@@ -72,22 +72,25 @@ const Sidebar = memo(({
     logo: {
       display: 'flex',
       alignItems: 'center',
-      gap: '10px',
+      justifyContent: 'center',
+      gap: '8px',
       overflow: 'hidden',
+      flex: 1,
     },
     logoIcon: {
-      fontSize: '24px',
+      fontSize: '20px',
       flexShrink: 0,
     },
     logoText: {
-      fontSize: '14px',
-      fontWeight: '700',
+      fontSize: '13px',
+      fontWeight: '600',
       background: 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)',
       WebkitBackgroundClip: 'text',
       WebkitTextFillColor: 'transparent',
       whiteSpace: 'nowrap',
       opacity: isExpanded ? 1 : 0,
       transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+      letterSpacing: '0.5px',
     },
     portfolioValue: {
       display: 'flex',
@@ -224,14 +227,14 @@ const Sidebar = memo(({
     <div style={styles.sidebar}>
       {/* Header with logo and portfolio value */}
       <div style={styles.header}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <div style={styles.logo}>
-            <span style={styles.logoIcon}>🎲</span>
-            <span style={styles.logoText}>Monte Carlo</span>
+            <span style={styles.logoIcon}>📈</span>
+            <span style={styles.logoText}>factorsim.xyz</span>
           </div>
           {/* Autosave indicator - in header for visibility */}
           {AutosaveIndicator && (
-            <div style={{ flexShrink: 0 }}>
+            <div style={{ flexShrink: 0, position: 'absolute', right: isExpanded ? '12px' : '8px' }}>
               <AutosaveIndicator status={autosaveStatus} compact={true} />
             </div>
           )}
