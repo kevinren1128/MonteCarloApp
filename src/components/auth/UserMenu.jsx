@@ -70,6 +70,8 @@ export function UserMenu({ syncState = { status: 'idle' } }) {
     await logout();
   };
 
+  // Only show badge for active sync states (syncing = spinner, synced = checkmark)
+  // Don't show badge for idle/error/offline - less alarming, details in dropdown
   const getSyncStatusIcon = () => {
     switch (syncStatus) {
       case 'syncing':
@@ -84,19 +86,8 @@ export function UserMenu({ syncState = { status: 'idle' } }) {
             <path fill="#34A853" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
           </svg>
         );
-      case 'error':
-        return (
-          <svg width="12" height="12" viewBox="0 0 24 24">
-            <path fill="#EA4335" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-          </svg>
-        );
-      case 'offline':
-        return (
-          <svg width="12" height="12" viewBox="0 0 24 24">
-            <path fill="#FBBC04" d="M19.35 10.04C18.67 6.59 15.64 4 12 4c-1.48 0-2.85.43-4.01 1.17l1.46 1.46C10.21 6.23 11.08 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19c1.66 0 3 1.34 3 3 0 .99-.49 1.87-1.24 2.41l1.46 1.46C23.34 17.85 24 16.51 24 15c0-2.64-2.05-4.78-4.65-4.96zM3 5.27l2.75 2.74C2.56 8.15 0 10.77 0 14c0 2.76 2.24 5 5 5h11.73l2 2L20 19.73 4.27 4 3 5.27zM7.73 10l8 8H5c-1.66 0-3-1.34-3-3s1.34-3 3-3h2.73z"/>
-          </svg>
-        );
       default:
+        // Don't show badge for idle, error, or offline
         return null;
     }
   };
@@ -138,7 +129,7 @@ export function UserMenu({ syncState = { status: 'idle' } }) {
             {displayInfo.name.charAt(0).toUpperCase()}
           </div>
         )}
-        {syncStatus !== 'idle' && (
+        {(syncStatus === 'syncing' || syncStatus === 'synced') && (
           <span style={styles.syncIndicator}>
             {getSyncStatusIcon()}
           </span>
