@@ -698,61 +698,42 @@ export const fetchFinancialGrowth = async (ticker, apiKey) => {
 
 /**
  * Fetch upcoming earnings date and recent surprises
- * Uses earnings-surprises endpoint for historical surprise data
- * Uses earning_calendar endpoint for upcoming earnings
+ * Uses stable/earnings endpoint for both historical and upcoming earnings data
+ * This is more reliable than the legacy v3 endpoints
  */
 export const fetchEarningsCalendar = async (ticker, apiKey) => {
   try {
-    // Get yesterday (to catch today's earnings) and 90 days from now
     const today = new Date();
-    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-    const fromDate = yesterday.toISOString().split('T')[0];
-    const toDate = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const todayStr = today.toISOString().split('T')[0];
 
-    // Fetch earnings surprises (historical) and upcoming earnings calendar
-    const surprisesUrl = `https://financialmodelingprep.com/api/v3/earnings-surprises/${ticker}?apikey=${apiKey}`;
-    // Per FMP docs: earning_calendar with from/to dates (max 3 months range)
-    const calendarUrl = `https://financialmodelingprep.com/api/v3/earning_calendar?from=${fromDate}&to=${toDate}&apikey=${apiKey}`;
-    // Historical earnings for this specific symbol (includes past and future)
-    const historicalUrl = `https://financialmodelingprep.com/api/v3/historical/earning_calendar/${ticker}?limit=10&apikey=${apiKey}`;
+    // Use stable API - returns both historical and upcoming earnings for a specific symbol
+    // Fields: symbol, date, epsActual, epsEstimated, revenueActual, revenueEstimated, lastUpdated
+    const earningsData = await fetchFMP(`/earnings?symbol=${ticker}&limit=20`, apiKey);
 
-    const [surprisesResp, calendarResp, historicalResp] = await Promise.all([
-      fetch(surprisesUrl).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(calendarUrl).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(historicalUrl).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]);
-
-    // Filter calendar response to only this ticker (it returns all companies in date range)
-    const tickerUpper = ticker.toUpperCase();
-    const calendarFiltered = (calendarResp || []).filter(e => e.symbol?.toUpperCase() === tickerUpper);
-
-    // Use filtered calendar if available, otherwise historical endpoint
-    const upcomingResp = calendarFiltered.length > 0 ? calendarFiltered : historicalResp;
-
-    console.log('[FMP] Earnings fetch for', ticker, '- calendar:', calendarFiltered.length, '- historical:', historicalResp?.length || 0);
+    if (!earningsData || earningsData.length === 0) {
+      console.log('[FMP] No earnings data for', ticker);
+      return null;
+    }
 
     // Log fields for debugging
-    if (surprisesResp?.[0]) {
-      console.log('[FMP] Earnings surprises fields for', ticker, ':', Object.keys(surprisesResp[0]));
-    }
-    if (upcomingResp?.[0]) {
-      console.log('[FMP] Upcoming earnings fields for', ticker, ':', Object.keys(upcomingResp[0]), '- dates:', upcomingResp.slice(0, 3).map(e => e.date));
-    } else {
-      console.log('[FMP] No upcoming earnings data for', ticker, '- resp1:', upcomingResp1?.length || 0, '- resp2:', upcomingResp2?.length || 0);
-    }
+    console.log('[FMP] Earnings fields for', ticker, ':', Object.keys(earningsData[0]));
 
-    // Process surprises data
-    const surprisesData = surprisesResp || [];
+    // Sort by date descending (most recent first)
+    const sortedEarnings = [...earningsData].sort((a, b) =>
+      (b.date || '').localeCompare(a.date || '')
+    );
 
-    // Get recent surprises (last 4 quarters)
-    const recentSurprises = surprisesData.slice(0, 4);
+    // Find historical earnings (where epsActual is not null) for surprise calculation
+    const historicalEarnings = sortedEarnings.filter(e =>
+      e.epsActual != null && e.epsEstimated != null
+    );
 
-    // Calculate surprise percentages
-    // Field names from FMP: actualEarningResult, estimatedEarning
-    const surprises = recentSurprises
+    // Calculate surprise percentages from last 4 quarters with actual results
+    const recentWithActuals = historicalEarnings.slice(0, 4);
+    const surprises = recentWithActuals
       .map(e => {
-        const actual = e.actualEarningResult ?? e.eps ?? e.actualEps;
-        const estimated = e.estimatedEarning ?? e.epsEstimated ?? e.estimatedEps;
+        const actual = e.epsActual;
+        const estimated = e.epsEstimated;
         if (actual != null && estimated != null && estimated !== 0) {
           return (actual - estimated) / Math.abs(estimated);
         }
@@ -764,27 +745,33 @@ export const fetchEarningsCalendar = async (ticker, apiKey) => {
       ? surprises.reduce((a, b) => a + b, 0) / surprises.length
       : null;
 
-    // Find next upcoming earnings from calendar response
-    const upcomingData = upcomingResp || [];
-    // Get today's date string for comparison
-    const todayStr = today.toISOString().split('T')[0];
-    // Sort by date and find first future date (include today and yesterday to catch current earnings)
-    const sortedUpcoming = upcomingData
-      .filter(e => e.date && e.date >= fromDate)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    // Find next upcoming earnings (where epsActual is null and date >= today)
+    const upcomingEarnings = sortedEarnings
+      .filter(e => e.date && e.date >= todayStr && e.epsActual == null)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
-    // Prefer dates from today onwards, but fall back to yesterday if that's all we have
-    const upcoming = sortedUpcoming.find(e => e.date >= todayStr) || sortedUpcoming[0];
+    const nextEarnings = upcomingEarnings[0] || null;
 
-    console.log('[FMP] Earnings calendar for', ticker, '- found:', sortedUpcoming.length, 'entries, selected:', upcoming?.date || 'none');
+    // Also check for very recent earnings (within last 7 days) if no future ones found
+    // This catches earnings that just happened
+    if (!nextEarnings) {
+      const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const recentEarnings = sortedEarnings
+        .filter(e => e.date && e.date >= sevenDaysAgo && e.date <= todayStr)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      if (recentEarnings.length > 0) {
+        console.log('[FMP] Found recent earnings for', ticker, ':', recentEarnings[0].date);
+      }
+    }
 
-    console.log(`[FMP] Earnings for ${ticker}: surprises=${surprises.length}, avgSurprise=${avgSurprise?.toFixed(2) || 'none'}, next=${upcoming?.date || 'none'}`);
+    console.log(`[FMP] Earnings for ${ticker}: historical=${historicalEarnings.length}, surprises=${surprises.length}, avgSurprise=${avgSurprise?.toFixed(2) || 'none'}, next=${nextEarnings?.date || 'none'}`);
 
     return {
-      nextEarningsDate: upcoming?.date || null,
-      nextEpsEstimate: upcoming?.epsEstimated ?? null,
-      lastEps: recentSurprises[0]?.actualEarningResult ?? recentSurprises[0]?.eps ?? null,
-      lastEpsEstimate: recentSurprises[0]?.estimatedEarning ?? recentSurprises[0]?.epsEstimated ?? null,
+      nextEarningsDate: nextEarnings?.date || null,
+      nextEpsEstimate: nextEarnings?.epsEstimated ?? null,
+      nextRevenueEstimate: nextEarnings?.revenueEstimated ?? null,
+      lastEps: recentWithActuals[0]?.epsActual ?? null,
+      lastEpsEstimate: recentWithActuals[0]?.epsEstimated ?? null,
       lastSurprise: surprises[0] ?? null,
       avgSurprise,
       beatCount: surprises.filter(s => s > 0).length,
