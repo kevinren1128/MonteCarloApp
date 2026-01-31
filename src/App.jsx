@@ -3063,10 +3063,10 @@ function MonteCarloSimulator() {
         })
         .filter(Boolean);
     }
-    // Filter out groups with less than 2 members
+    // Filter out groups with less than 2 members (except "Ungrouped" which can have 1)
     const meaningfulGroups = {};
     for (const [groupName, posIds] of Object.entries(posIdGroups)) {
-      if (posIds.length >= 2) {
+      if (groupName === 'Ungrouped' ? posIds.length >= 1 : posIds.length >= 2) {
         meaningfulGroups[groupName] = posIds;
       }
     }
@@ -3107,8 +3107,10 @@ function MonteCarloSimulator() {
     let adjustments = [];
 
     // Build a map of position ID -> groups it belongs to
+    // Skip "Ungrouped" - that's for positions explicitly excluded from correlation floors
     const posIdToGroups = {};
     for (const [group, posIds] of Object.entries(activeGroups)) {
+      if (group === 'Ungrouped') continue; // Skip Ungrouped - no correlation floor applied
       for (const posId of posIds) {
         if (!posIdToGroups[posId]) posIdToGroups[posId] = [];
         posIdToGroups[posId].push(group);
@@ -6558,13 +6560,15 @@ function MonteCarloSimulator() {
       console.log(`\n${'='.repeat(50)}\n🏗️ FULL LOAD: Step 5/${steps.length} - ${steps[4].name}\n${'='.repeat(50)}`);
 
       // Cloud-forward correlation groups flow:
-      // 1. Load saved groups from Supabase (preserves user's edits)
-      // 2. Find NEW tickers not in any saved group
+      // 1. Load saved groups from Supabase (preserves user's edits, including "Ungrouped")
+      // 2. Find NEW tickers not in any saved group (including "Ungrouped")
       // 3. Auto-classify only NEW tickers using metadata (if available)
       // 4. Merge new classifications with existing groups, save back to Supabase
-      // 5. Apply correlation floors
+      // 5. Apply correlation floors (skipping "Ungrouped")
       // Note: Full re-detection only happens via "Refresh Sector/Industry Data" button
+      // Note: "Ungrouped" is a special group - positions there won't be auto-classified
 
+      const UNGROUPED = 'Ungrouped';
       let groupsToUse = correlationGroups;
       const portfolioTickers = positions.map(p => p.ticker?.toUpperCase()).filter(Boolean);
 
@@ -6578,11 +6582,28 @@ function MonteCarloSimulator() {
         if (error) {
           console.warn('[LoadAll] Failed to load correlation groups from Supabase:', error);
         } else if (savedTickerGroups && Object.keys(savedTickerGroups).length > 0) {
-          // Convert ticker-based groups to position-ID format
-          const savedPosIdGroups = convertGroupsToPositionIds(savedTickerGroups);
+          // Convert ticker-based groups to position-ID format (special handling for Ungrouped)
+          const savedPosIdGroups = {};
+          for (const [groupName, tickers] of Object.entries(savedTickerGroups)) {
+            const posIds = tickers
+              .map(ticker => {
+                const pos = positions.find(p => p.ticker?.toUpperCase() === ticker?.toUpperCase());
+                return pos?.id;
+              })
+              .filter(Boolean);
+
+            // Keep Ungrouped even with 1 member, filter others to 2+
+            if (groupName === UNGROUPED) {
+              if (posIds.length > 0) {
+                savedPosIdGroups[groupName] = posIds;
+              }
+            } else if (posIds.length >= 2) {
+              savedPosIdGroups[groupName] = posIds;
+            }
+          }
           console.log(`[LoadAll] Loaded ${Object.keys(savedTickerGroups).length} groups from Supabase`);
 
-          // Find tickers already in saved groups
+          // Find tickers already in saved groups (INCLUDING Ungrouped - these should not be auto-classified)
           const savedTickers = new Set();
           for (const tickers of Object.values(savedTickerGroups)) {
             for (const ticker of tickers) {
@@ -6590,7 +6611,7 @@ function MonteCarloSimulator() {
             }
           }
 
-          // Find NEW tickers not in any saved group
+          // Find NEW tickers not in any saved group (including Ungrouped)
           const newTickers = portfolioTickers.filter(t => !savedTickers.has(t));
 
           if (newTickers.length > 0 && positionMetadata && Object.keys(positionMetadata).length > 0) {
@@ -6618,10 +6639,10 @@ function MonteCarloSimulator() {
               }
             }
 
-            // Filter out groups with less than 2 members
+            // Filter out groups with less than 2 members (except Ungrouped)
             const meaningfulGroups = {};
             for (const [groupName, posIds] of Object.entries(mergedPosIdGroups)) {
-              if (posIds.length >= 2) {
+              if (groupName === UNGROUPED || posIds.length >= 2) {
                 meaningfulGroups[groupName] = posIds;
               }
             }

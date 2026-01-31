@@ -2172,55 +2172,62 @@ const CorrelationTab = ({
           {/* Show detected groups */}
           {correlationGroups && Object.keys(correlationGroups).length > 0 && (() => {
             const allGroupedPosIds = Object.values(correlationGroups).flat();
-            
+            // Sort groups: regular groups first, then "Ungrouped" at the end
+            const sortedGroups = Object.entries(correlationGroups).sort(([a], [b]) => {
+              if (a === 'Ungrouped') return 1;
+              if (b === 'Ungrouped') return -1;
+              return a.localeCompare(b);
+            });
+
             return (
             <div>
               <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#00d4ff', marginBottom: '8px' }}>
                 Correlation Groups (click ✕ to remove, use dropdown to add):
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {Object.entries(correlationGroups).map(([group, groupPosIds]) => {
+                {sortedGroups.map(([group, groupPosIds]) => {
                   const availableToAdd = positions.filter(p => !allGroupedPosIds.includes(p.id));
-                  
+                  const isUngrouped = group === 'Ungrouped';
+
                   return (
                   <div key={group} style={{
                     padding: '10px 12px',
                     borderRadius: '6px',
-                    background: 'rgba(46, 204, 113, 0.1)',
-                    border: '1px solid rgba(46, 204, 113, 0.2)',
+                    background: isUngrouped ? 'rgba(155, 89, 182, 0.1)' : 'rgba(46, 204, 113, 0.1)',
+                    border: `1px solid ${isUngrouped ? 'rgba(155, 89, 182, 0.3)' : 'rgba(46, 204, 113, 0.2)'}`,
                   }}>
-                    <div style={{ 
-                      fontSize: '12px', 
-                      fontWeight: 'bold', 
-                      color: '#2ecc71', 
+                    <div style={{
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      color: isUngrouped ? '#9b59b6' : '#2ecc71',
                       marginBottom: '8px',
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
                     }}>
-                      <span>📁 {group}</span>
+                      <span>{isUngrouped ? '🚫' : '📁'} {group}</span>
                       <span style={{ fontSize: '10px', color: '#888', fontWeight: 'normal' }}>
-                        {groupPosIds.length} positions • 55% correlation floor
+                        {groupPosIds.length} position{groupPosIds.length !== 1 ? 's' : ''}{isUngrouped ? ' • no correlation floor' : ' • 55% correlation floor'}
                       </span>
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
                       {groupPosIds.map(posId => {
                         const pos = positions.find(p => p.id === posId);
                         if (!pos) return null;
-                        
+
                         const displayName = getPositionDisplayName(posId);
-                        
+
                         return (
-                        <div 
-                          key={posId} 
+                        <div
+                          key={posId}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: '4px',
                             padding: '4px 8px',
                             borderRadius: '4px',
-                            background: 'rgba(0, 212, 255, 0.15)',
-                            border: '1px solid rgba(0, 212, 255, 0.3)',
+                            background: isUngrouped ? 'rgba(155, 89, 182, 0.15)' : 'rgba(0, 212, 255, 0.15)',
+                            border: `1px solid ${isUngrouped ? 'rgba(155, 89, 182, 0.3)' : 'rgba(0, 212, 255, 0.3)'}`,
                             fontSize: '11px',
                           }}
                         >
@@ -2230,7 +2237,10 @@ const CorrelationTab = ({
                               setCorrelationGroups(prev => {
                                 const newGroups = { ...prev };
                                 newGroups[group] = newGroups[group].filter(id => id !== posId);
-                                if (newGroups[group].length <= 1) {
+                                // For Ungrouped, keep even with 0 members; for others, delete if <= 1
+                                if (!isUngrouped && newGroups[group].length <= 1) {
+                                  delete newGroups[group];
+                                } else if (isUngrouped && newGroups[group].length === 0) {
                                   delete newGroups[group];
                                 }
                                 return newGroups;
@@ -2290,32 +2300,34 @@ const CorrelationTab = ({
                 )})}
               </div>
               
-              {/* Show ungrouped positions with add-to-group dropdown */}
+              {/* Show positions not in any group - with add-to-group dropdown */}
               {(() => {
-                const ungroupedPositions = positions.filter(p => !allGroupedPosIds.includes(p.id));
-                
-                if (ungroupedPositions.length === 0) return null;
-                
+                const notInAnyGroup = positions.filter(p => !allGroupedPosIds.includes(p.id));
+
+                if (notInAnyGroup.length === 0) return null;
+
+                // Include "Ungrouped" as an option even if it doesn't exist yet
                 const groupNames = Object.keys(correlationGroups);
-                
+                const hasUngroupedGroup = groupNames.includes('Ungrouped');
+
                 return (
-                  <div style={{ 
-                    marginTop: '12px', 
+                  <div style={{
+                    marginTop: '12px',
                     padding: '10px 12px',
                     borderRadius: '6px',
                     background: 'rgba(255, 159, 67, 0.1)',
                     border: '1px solid rgba(255, 159, 67, 0.2)',
                   }}>
                     <div style={{ fontSize: '11px', color: '#ff9f43', marginBottom: '8px' }}>
-                      <strong>Ungrouped positions</strong> (click arrow to add to a group):
+                      <strong>Not in any group</strong> (add to a group, or mark as "Ungrouped" to exclude from auto-grouping):
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {ungroupedPositions.map(pos => {
+                      {notInAnyGroup.map(pos => {
                         const displayName = getPositionDisplayName(pos.id);
-                          
+
                         return (
-                        <div 
-                          key={pos.id} 
+                        <div
+                          key={pos.id}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -2328,32 +2340,34 @@ const CorrelationTab = ({
                           }}
                         >
                           <span style={{ color: '#fff' }}>{displayName}</span>
-                          {groupNames.length > 0 && (
-                            <select
-                              style={{
-                                background: 'transparent',
-                                border: 'none',
-                                color: '#ff9f43',
-                                fontSize: '10px',
-                                cursor: 'pointer',
-                                padding: '0',
-                              }}
-                              value=""
-                              onChange={(e) => {
-                                if (e.target.value) {
-                                  setCorrelationGroups(prev => ({
-                                    ...prev,
-                                    [e.target.value]: [...(prev[e.target.value] || []), pos.id]
-                                  }));
-                                }
-                              }}
-                            >
-                              <option value="">→</option>
-                              {groupNames.map(g => (
-                                <option key={g} value={g}>{g}</option>
-                              ))}
-                            </select>
-                          )}
+                          <select
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#ff9f43',
+                              fontSize: '10px',
+                              cursor: 'pointer',
+                              padding: '0',
+                            }}
+                            value=""
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                setCorrelationGroups(prev => ({
+                                  ...prev,
+                                  [e.target.value]: [...(prev[e.target.value] || []), pos.id]
+                                }));
+                              }
+                            }}
+                          >
+                            <option value="">→</option>
+                            {/* Always show Ungrouped option first */}
+                            {!hasUngroupedGroup && (
+                              <option value="Ungrouped">🚫 Ungrouped (exclude)</option>
+                            )}
+                            {groupNames.map(g => (
+                              <option key={g} value={g}>{g === 'Ungrouped' ? '🚫 Ungrouped (exclude)' : g}</option>
+                            ))}
+                          </select>
                         </div>
                       )})}
                     </div>
