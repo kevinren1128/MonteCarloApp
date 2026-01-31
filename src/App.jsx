@@ -36,6 +36,9 @@ import { styles } from './styles/appStyles';
 // Yahoo Finance API service - routes through Cloudflare Worker with CORS proxy fallback
 import { fetchYahooQuote, fetchYahooHistory, fetchYahooProfile, fetchExchangeRate, fetchYahooData } from './services/yahooFinance';
 
+// Market data service - derived metrics from Cloudflare Worker
+import { fetchAllDerivedMetrics, isWorkerAvailable } from './services/marketService';
+
 // Position price cache for persistent storage
 import {
   loadPositionPriceCache,
@@ -2228,20 +2231,39 @@ function MonteCarloSimulator() {
     });
     
     console.log(`📋 Profile fetch complete in ${(performance.now() - startTime).toFixed(0)}ms`);
-    
-    // PHASE 3: Process all data
-    setUnifiedFetchProgress({ 
-      current: allTickers.length, 
-      total: allTickers.length, 
-      message: 'Calculating betas & correlations...' 
+
+    // PHASE 2.5: Fetch pre-computed derived metrics from Worker (if available)
+    // This can significantly speed up processing by using cached beta/vol/distribution
+    setUnifiedFetchProgress({
+      current: allTickers.length,
+      total: allTickers.length,
+      message: 'Fetching pre-computed metrics from Worker...'
     });
-    
+
+    let workerDerivedMetrics = { betas: null, volatility: null, distributions: null, calendarReturns: null };
+    if (isWorkerAvailable()) {
+      try {
+        workerDerivedMetrics = await fetchAllDerivedMetrics(allTickers);
+        const workerHits = Object.values(workerDerivedMetrics).filter(v => v && Object.keys(v).length > 0).length;
+        console.log(`⚡ Worker derived metrics: ${workerHits}/4 endpoints returned data`);
+      } catch (err) {
+        console.warn('Worker derived metrics fetch failed, will compute locally:', err.message);
+      }
+    }
+
+    // PHASE 3: Process all data
+    setUnifiedFetchProgress({
+      current: allTickers.length,
+      total: allTickers.length,
+      message: 'Calculating betas & correlations...'
+    });
+
     // First, get SPY data for beta calculation (with timestamps for international date alignment)
     const spyHistory = historyResults['SPY']?.data;
     const spyReturns = spyHistory ? computeDailyReturns(spyHistory) : [];
     const spyTimestamps = spyHistory ? spyHistory.slice(1).map(h => h.date?.getTime?.() || h.date) : [];
     const spyData = { returns: spyReturns, timestamps: spyTimestamps };
-    
+
     // Log data summary
     console.log('📅 Data date ranges:');
     
@@ -2270,8 +2292,39 @@ function MonteCarloSimulator() {
         const years = (history.length / 252).toFixed(1);
         const currencyNote = currency !== 'USD' ? ` [${currency}→USD @${exchangeRate.toFixed(4)}]` : '';
         console.log(`   ${ticker}: ${history.length} days (~${years}yr) from ${startDate} to ${endDate}${currencyNote}`);
-        
+
         const processed = processTickerData(ticker, history, profile, spyData, currency, exchangeRate);
+
+        // Override with Worker-computed metrics if available (faster, pre-cached)
+        const workerBeta = workerDerivedMetrics.betas?.[ticker];
+        const workerVol = workerDerivedMetrics.volatility?.[ticker];
+        const workerDist = workerDerivedMetrics.distributions?.[ticker];
+        const workerCalRet = workerDerivedMetrics.calendarReturns?.[ticker];
+
+        if (workerBeta && workerBeta.beta != null) {
+          processed.beta = workerBeta.beta;
+          processed.correlation = workerBeta.correlation;
+          processed.workerSource = true;
+        }
+        if (workerVol && workerVol.annualizedVol != null) {
+          processed.volatility = workerVol.annualizedVol;
+          processed.ytdReturn = workerVol.ytdReturn;
+          processed.oneYearReturn = workerVol.oneYearReturn;
+          processed.thirtyDayReturn = workerVol.thirtyDayReturn;
+        }
+        if (workerDist && workerDist.p50 != null) {
+          processed.distribution = {
+            p5: workerDist.p5,
+            p25: workerDist.p25,
+            p50: workerDist.p50,
+            p75: workerDist.p75,
+            p95: workerDist.p95,
+          };
+        }
+        if (workerCalRet && workerCalRet.years) {
+          processed.calendarYearReturns = workerCalRet.years;
+        }
+
         newData[ticker] = processed;
       } else if (!newData[ticker]) {
         newData[ticker] = { ticker, error: 'No data available' };

@@ -606,6 +606,350 @@ export async function isSyncAvailable() {
   }
 }
 
+// ============================================
+// POSITION NOTES
+// ============================================
+
+/**
+ * Save notes for a position
+ */
+export async function savePositionNotes(positionId, notes, tags = [], thesis = null) {
+  const startTime = performance.now();
+
+  try {
+    const { error } = await supabase
+      .from('position_notes')
+      .upsert({
+        position_id: positionId,
+        notes,
+        tags,
+        thesis,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'position_id' });
+
+    if (error) {
+      logger.error('Save position notes error', { error: error.message, positionId });
+      return { success: false, error };
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Position notes saved', { positionId, duration });
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('savePositionNotes exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
+/**
+ * Get notes for a position
+ */
+export async function getPositionNotes(positionId) {
+  try {
+    const { data, error } = await supabase
+      .from('position_notes')
+      .select('*')
+      .eq('position_id', positionId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 = not found
+      logger.error('Get position notes error', { error: error.message, positionId });
+      return { data: null, error };
+    }
+
+    return { data: data || null, error: null };
+  } catch (error) {
+    logger.error('getPositionNotes exception', { error: error.message });
+    return { data: null, error };
+  }
+}
+
+/**
+ * Get all notes for positions in a portfolio
+ */
+export async function getAllPositionNotes(portfolioId) {
+  try {
+    const { data, error } = await supabase
+      .from('position_notes')
+      .select(`
+        *,
+        positions!inner(portfolio_id, symbol)
+      `)
+      .eq('positions.portfolio_id', portfolioId);
+
+    if (error) {
+      logger.error('Get all position notes error', { error: error.message });
+      return { data: [], error };
+    }
+
+    return { data: data || [], error: null };
+  } catch (error) {
+    logger.error('getAllPositionNotes exception', { error: error.message });
+    return { data: [], error };
+  }
+}
+
+/**
+ * Delete notes for a position
+ */
+export async function deletePositionNotes(positionId) {
+  try {
+    const { error } = await supabase
+      .from('position_notes')
+      .delete()
+      .eq('position_id', positionId);
+
+    if (error) {
+      logger.error('Delete position notes error', { error: error.message });
+      return { success: false, error };
+    }
+
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('deletePositionNotes exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
+// ============================================
+// TARGET ALLOCATIONS
+// ============================================
+
+/**
+ * Save target allocation for a symbol
+ */
+export async function saveTargetAllocation(portfolioId, symbol, targetWeight, minWeight = null, maxWeight = null) {
+  const startTime = performance.now();
+
+  try {
+    const { error } = await supabase
+      .from('target_allocations')
+      .upsert({
+        portfolio_id: portfolioId,
+        symbol: symbol.toUpperCase(),
+        target_weight: targetWeight,
+        min_weight: minWeight,
+        max_weight: maxWeight,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'portfolio_id,symbol' });
+
+    if (error) {
+      logger.error('Save target allocation error', { error: error.message, symbol });
+      return { success: false, error };
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Target allocation saved', { symbol, targetWeight, duration });
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('saveTargetAllocation exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
+/**
+ * Save multiple target allocations at once
+ */
+export async function saveTargetAllocations(portfolioId, allocations) {
+  const startTime = performance.now();
+
+  try {
+    const records = allocations.map(a => ({
+      portfolio_id: portfolioId,
+      symbol: a.symbol.toUpperCase(),
+      target_weight: a.targetWeight,
+      min_weight: a.minWeight || null,
+      max_weight: a.maxWeight || null,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error } = await supabase
+      .from('target_allocations')
+      .upsert(records, { onConflict: 'portfolio_id,symbol' });
+
+    if (error) {
+      logger.error('Save target allocations error', { error: error.message });
+      return { success: false, error };
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Target allocations saved', { count: allocations.length, duration });
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('saveTargetAllocations exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
+/**
+ * Get all target allocations for a portfolio
+ */
+export async function getTargetAllocations(portfolioId) {
+  try {
+    const { data, error } = await supabase
+      .from('target_allocations')
+      .select('*')
+      .eq('portfolio_id', portfolioId)
+      .order('symbol');
+
+    if (error) {
+      logger.error('Get target allocations error', { error: error.message });
+      return { data: [], error };
+    }
+
+    return { data: data || [], error: null };
+  } catch (error) {
+    logger.error('getTargetAllocations exception', { error: error.message });
+    return { data: [], error };
+  }
+}
+
+/**
+ * Delete a target allocation
+ */
+export async function deleteTargetAllocation(portfolioId, symbol) {
+  try {
+    const { error } = await supabase
+      .from('target_allocations')
+      .delete()
+      .eq('portfolio_id', portfolioId)
+      .eq('symbol', symbol.toUpperCase());
+
+    if (error) {
+      logger.error('Delete target allocation error', { error: error.message });
+      return { success: false, error };
+    }
+
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('deleteTargetAllocation exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
+// ============================================
+// DIVIDEND HISTORY
+// ============================================
+
+/**
+ * Add a dividend record
+ */
+export async function addDividend(portfolioId, dividend) {
+  const startTime = performance.now();
+
+  try {
+    const { data, error } = await supabase
+      .from('dividend_history')
+      .insert({
+        portfolio_id: portfolioId,
+        symbol: dividend.symbol.toUpperCase(),
+        ex_date: dividend.exDate,
+        amount: dividend.amount,
+        shares_held: dividend.sharesHeld || null,
+        total_amount: dividend.totalAmount || (dividend.amount * (dividend.sharesHeld || 1)),
+        received_date: dividend.receivedDate || null,
+        reinvested: dividend.reinvested || false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      logger.error('Add dividend error', { error: error.message, symbol: dividend.symbol });
+      return { data: null, error };
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Dividend added', { symbol: dividend.symbol, amount: dividend.amount, duration });
+    return { data, error: null };
+  } catch (error) {
+    logger.error('addDividend exception', { error: error.message });
+    return { data: null, error };
+  }
+}
+
+/**
+ * Get all dividends for a portfolio
+ */
+export async function getDividends(portfolioId, symbol = null) {
+  try {
+    let query = supabase
+      .from('dividend_history')
+      .select('*')
+      .eq('portfolio_id', portfolioId)
+      .order('ex_date', { ascending: false });
+
+    if (symbol) {
+      query = query.eq('symbol', symbol.toUpperCase());
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      logger.error('Get dividends error', { error: error.message });
+      return { data: [], error };
+    }
+
+    return { data: data || [], error: null };
+  } catch (error) {
+    logger.error('getDividends exception', { error: error.message });
+    return { data: [], error };
+  }
+}
+
+/**
+ * Get dividend summary by symbol
+ */
+export async function getDividendSummary(portfolioId) {
+  try {
+    const { data, error } = await supabase
+      .from('dividend_history')
+      .select('symbol, amount, total_amount')
+      .eq('portfolio_id', portfolioId);
+
+    if (error) {
+      logger.error('Get dividend summary error', { error: error.message });
+      return { data: {}, error };
+    }
+
+    // Aggregate by symbol
+    const summary = {};
+    (data || []).forEach(d => {
+      if (!summary[d.symbol]) {
+        summary[d.symbol] = { count: 0, totalAmount: 0 };
+      }
+      summary[d.symbol].count++;
+      summary[d.symbol].totalAmount += d.total_amount || d.amount;
+    });
+
+    return { data: summary, error: null };
+  } catch (error) {
+    logger.error('getDividendSummary exception', { error: error.message });
+    return { data: {}, error };
+  }
+}
+
+/**
+ * Delete a dividend record
+ */
+export async function deleteDividend(dividendId) {
+  try {
+    const { error } = await supabase
+      .from('dividend_history')
+      .delete()
+      .eq('id', dividendId);
+
+    if (error) {
+      logger.error('Delete dividend error', { error: error.message });
+      return { success: false, error };
+    }
+
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('deleteDividend exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
 export default {
   fetchAllData,
   savePositions,
@@ -616,4 +960,19 @@ export default {
   saveSettings,
   deletePortfolio,
   isSyncAvailable,
+  // Position notes
+  savePositionNotes,
+  getPositionNotes,
+  getAllPositionNotes,
+  deletePositionNotes,
+  // Target allocations
+  saveTargetAllocation,
+  saveTargetAllocations,
+  getTargetAllocations,
+  deleteTargetAllocation,
+  // Dividend history
+  addDividend,
+  getDividends,
+  getDividendSummary,
+  deleteDividend,
 };

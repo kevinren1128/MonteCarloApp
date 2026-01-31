@@ -31,6 +31,11 @@ const CACHE_TTLS = {
   profile: 7 * 24 * 60 * 60, // 7 days
   consensus: 4 * 60 * 60,   // 4 hours
   fx: 24 * 60 * 60,         // 24 hours
+  // Derived metrics (computed from prices)
+  beta: 6 * 60 * 60,        // 6 hours (more stable than prices)
+  volatility: 6 * 60 * 60,  // 6 hours
+  distribution: 12 * 60 * 60, // 12 hours (expensive to compute, stable)
+  calendarReturns: 24 * 60 * 60, // 24 hours (only changes end of day)
 };
 
 // ============================================
@@ -108,6 +113,18 @@ export default {
       } else if (path.startsWith('/api/fx')) {
         handler = 'fx';
         response = await handleFx(url, env, requestId);
+      } else if (path.startsWith('/api/beta')) {
+        handler = 'beta';
+        response = await handleBeta(url, env, requestId);
+      } else if (path.startsWith('/api/volatility')) {
+        handler = 'volatility';
+        response = await handleVolatility(url, env, requestId);
+      } else if (path.startsWith('/api/distribution')) {
+        handler = 'distribution';
+        response = await handleDistribution(url, env, requestId);
+      } else if (path.startsWith('/api/calendar-returns')) {
+        handler = 'calendar-returns';
+        response = await handleCalendarReturns(url, env, requestId);
       } else if (url.searchParams.has('url')) {
         handler = 'legacy';
         response = await handleLegacyProxy(url, env, requestId);
@@ -115,8 +132,11 @@ export default {
         handler = 'health';
         response = jsonResponse({
           status: 'ok',
-          version: '2.1.0',
-          endpoints: ['/api/prices', '/api/quotes', '/api/profile', '/api/consensus', '/api/fx'],
+          version: '2.2.0',
+          endpoints: [
+            '/api/prices', '/api/quotes', '/api/profile', '/api/consensus', '/api/fx',
+            '/api/beta', '/api/volatility', '/api/distribution', '/api/calendar-returns'
+          ],
           kvBound: !!env.CACHE,
         });
       } else {
@@ -710,4 +730,531 @@ function jsonResponse(data, status = 200) {
       'Cache-Control': status === 200 ? 'public, max-age=60' : 'no-cache',
     },
   });
+}
+
+// ============================================
+// DERIVED METRICS HANDLERS
+// ============================================
+
+/**
+ * Beta vs benchmark (default SPY)
+ * GET /api/beta?symbols=AAPL,MSFT&benchmark=SPY&range=1y
+ */
+async function handleBeta(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const benchmark = url.searchParams.get('benchmark') || 'SPY';
+  const range = url.searchParams.get('range') || '1y';
+  const interval = url.searchParams.get('interval') || '1d';
+
+  if (symbols.length === 0) {
+    return jsonResponse({ error: 'symbols parameter required' }, 400);
+  }
+
+  log.info('Computing beta', { requestId, symbols, benchmark, range });
+
+  const results = {};
+  const cacheStats = { hits: 0, misses: 0, computed: 0 };
+
+  // First, get benchmark prices (needed for all beta calculations)
+  const benchmarkKey = `prices:v1:${benchmark}:${range}:${interval}`;
+  let benchmarkData = await getCached(env, benchmarkKey, requestId);
+  if (!benchmarkData) {
+    benchmarkData = await fetchYahooChart(benchmark, range, interval, requestId);
+    if (benchmarkData) {
+      await setCache(env, benchmarkKey, benchmarkData, CACHE_TTLS.prices, requestId);
+    }
+  }
+
+  if (!benchmarkData?.prices?.length) {
+    return jsonResponse({ error: `Could not fetch benchmark ${benchmark}` }, 500);
+  }
+
+  const benchmarkReturns = computeDailyReturns(benchmarkData.prices);
+
+  // Process each symbol
+  const promises = symbols.map(async (symbol) => {
+    const cacheKey = `beta:v1:${symbol.toUpperCase()}:${benchmark}:${range}:${interval}`;
+
+    // Check cache first
+    let data = await getCached(env, cacheKey, requestId);
+    if (data) {
+      results[symbol] = { ...data, cached: true };
+      cacheStats.hits++;
+      return;
+    }
+
+    cacheStats.misses++;
+
+    // Get price data for this symbol
+    const priceKey = `prices:v1:${symbol.toUpperCase()}:${range}:${interval}`;
+    let priceData = await getCached(env, priceKey, requestId);
+    if (!priceData) {
+      priceData = await fetchYahooChart(symbol, range, interval, requestId);
+      if (priceData) {
+        await setCache(env, priceKey, priceData, CACHE_TTLS.prices, requestId);
+      }
+    }
+
+    if (!priceData?.prices?.length || priceData.prices.length < 30) {
+      results[symbol] = { error: 'Insufficient price data', minRequired: 30 };
+      return;
+    }
+
+    // Compute beta
+    const symbolReturns = computeDailyReturns(priceData.prices);
+    const { beta, correlation } = computeBetaCorrelation(symbolReturns, benchmarkReturns);
+
+    cacheStats.computed++;
+
+    data = {
+      symbol,
+      benchmark,
+      beta,
+      correlation,
+      range,
+      interval,
+      pointsUsed: Math.min(symbolReturns.length, benchmarkReturns.length),
+      asOf: new Date().toISOString().split('T')[0],
+    };
+
+    await setCache(env, cacheKey, data, CACHE_TTLS.beta, requestId);
+    results[symbol] = data;
+  });
+
+  await Promise.all(promises);
+
+  log.info('Beta complete', { requestId, symbolCount: symbols.length, ...cacheStats });
+  return jsonResponse(results);
+}
+
+/**
+ * Volatility and returns
+ * GET /api/volatility?symbols=AAPL&range=1y
+ */
+async function handleVolatility(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const range = url.searchParams.get('range') || '1y';
+  const interval = url.searchParams.get('interval') || '1d';
+
+  if (symbols.length === 0) {
+    return jsonResponse({ error: 'symbols parameter required' }, 400);
+  }
+
+  log.info('Computing volatility', { requestId, symbols, range });
+
+  const results = {};
+  const cacheStats = { hits: 0, misses: 0, computed: 0 };
+
+  const promises = symbols.map(async (symbol) => {
+    const cacheKey = `vol:v1:${symbol.toUpperCase()}:${range}:${interval}`;
+
+    // Check cache first
+    let data = await getCached(env, cacheKey, requestId);
+    if (data) {
+      results[symbol] = { ...data, cached: true };
+      cacheStats.hits++;
+      return;
+    }
+
+    cacheStats.misses++;
+
+    // Get price data
+    const priceKey = `prices:v1:${symbol.toUpperCase()}:${range}:${interval}`;
+    let priceData = await getCached(env, priceKey, requestId);
+    if (!priceData) {
+      priceData = await fetchYahooChart(symbol, range, interval, requestId);
+      if (priceData) {
+        await setCache(env, priceKey, priceData, CACHE_TTLS.prices, requestId);
+      }
+    }
+
+    if (!priceData?.prices?.length || priceData.prices.length < 30) {
+      results[symbol] = { error: 'Insufficient price data', minRequired: 30 };
+      return;
+    }
+
+    // Compute volatility and returns
+    const prices = priceData.prices;
+    const timestamps = priceData.timestamps;
+    const dailyReturns = computeDailyReturns(prices);
+    const annualizedVol = computeAnnualizedVolatility(dailyReturns);
+    const { ytdReturn, oneYearReturn, thirtyDayReturn } = computeReturns(prices, timestamps);
+
+    cacheStats.computed++;
+
+    data = {
+      symbol,
+      annualizedVol,
+      ytdReturn,
+      oneYearReturn,
+      thirtyDayReturn,
+      range,
+      interval,
+      pointsUsed: prices.length,
+      asOf: new Date().toISOString().split('T')[0],
+    };
+
+    await setCache(env, cacheKey, data, CACHE_TTLS.volatility, requestId);
+    results[symbol] = data;
+  });
+
+  await Promise.all(promises);
+
+  log.info('Volatility complete', { requestId, symbolCount: symbols.length, ...cacheStats });
+  return jsonResponse(results);
+}
+
+/**
+ * Bootstrap distribution estimates (p5, p25, p50, p75, p95)
+ * GET /api/distribution?symbols=AAPL&range=5y&bootstrap=1000
+ */
+async function handleDistribution(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const range = url.searchParams.get('range') || '5y';
+  const interval = url.searchParams.get('interval') || '1d';
+  const bootstrapCount = Math.min(parseInt(url.searchParams.get('bootstrap') || '1000'), 2000);
+
+  if (symbols.length === 0) {
+    return jsonResponse({ error: 'symbols parameter required' }, 400);
+  }
+
+  log.info('Computing distribution', { requestId, symbols, range, bootstrapCount });
+
+  const results = {};
+  const cacheStats = { hits: 0, misses: 0, computed: 0 };
+
+  const promises = symbols.map(async (symbol) => {
+    const cacheKey = `dist:v1:${symbol.toUpperCase()}:${range}:${interval}:b${bootstrapCount}`;
+
+    // Check cache first
+    let data = await getCached(env, cacheKey, requestId);
+    if (data) {
+      results[symbol] = { ...data, cached: true };
+      cacheStats.hits++;
+      return;
+    }
+
+    cacheStats.misses++;
+
+    // Get price data
+    const priceKey = `prices:v1:${symbol.toUpperCase()}:${range}:${interval}`;
+    let priceData = await getCached(env, priceKey, requestId);
+    if (!priceData) {
+      priceData = await fetchYahooChart(symbol, range, interval, requestId);
+      if (priceData) {
+        await setCache(env, priceKey, priceData, CACHE_TTLS.prices, requestId);
+      }
+    }
+
+    if (!priceData?.prices?.length || priceData.prices.length < 100) {
+      results[symbol] = { error: 'Insufficient price data for distribution', minRequired: 100 };
+      return;
+    }
+
+    // Compute bootstrap distribution
+    const logReturns = computeLogReturns(priceData.prices);
+    const distribution = bootstrapAnnualReturns(logReturns, bootstrapCount);
+
+    cacheStats.computed++;
+
+    data = {
+      symbol,
+      ...distribution,
+      bootstrapCount,
+      range,
+      interval,
+      pointsUsed: priceData.prices.length,
+      asOf: new Date().toISOString().split('T')[0],
+    };
+
+    await setCache(env, cacheKey, data, CACHE_TTLS.distribution, requestId);
+    results[symbol] = data;
+  });
+
+  await Promise.all(promises);
+
+  log.info('Distribution complete', { requestId, symbolCount: symbols.length, ...cacheStats });
+  return jsonResponse(results);
+}
+
+/**
+ * Calendar year returns
+ * GET /api/calendar-returns?symbols=AAPL&range=10y
+ */
+async function handleCalendarReturns(url, env, requestId) {
+  const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const range = url.searchParams.get('range') || '10y';
+  const interval = url.searchParams.get('interval') || '1d';
+
+  if (symbols.length === 0) {
+    return jsonResponse({ error: 'symbols parameter required' }, 400);
+  }
+
+  log.info('Computing calendar returns', { requestId, symbols, range });
+
+  const results = {};
+  const cacheStats = { hits: 0, misses: 0, computed: 0 };
+
+  const promises = symbols.map(async (symbol) => {
+    const cacheKey = `calret:v1:${symbol.toUpperCase()}:${range}:${interval}`;
+
+    // Check cache first
+    let data = await getCached(env, cacheKey, requestId);
+    if (data) {
+      results[symbol] = { ...data, cached: true };
+      cacheStats.hits++;
+      return;
+    }
+
+    cacheStats.misses++;
+
+    // Get price data
+    const priceKey = `prices:v1:${symbol.toUpperCase()}:${range}:${interval}`;
+    let priceData = await getCached(env, priceKey, requestId);
+    if (!priceData) {
+      priceData = await fetchYahooChart(symbol, range, interval, requestId);
+      if (priceData) {
+        await setCache(env, priceKey, priceData, CACHE_TTLS.prices, requestId);
+      }
+    }
+
+    if (!priceData?.prices?.length || priceData.prices.length < 30) {
+      results[symbol] = { error: 'Insufficient price data', minRequired: 30 };
+      return;
+    }
+
+    // Compute calendar year returns
+    const years = computeCalendarYearReturns(priceData.prices, priceData.timestamps);
+
+    cacheStats.computed++;
+
+    data = {
+      symbol,
+      years,
+      range,
+      interval,
+      pointsUsed: priceData.prices.length,
+      asOf: new Date().toISOString().split('T')[0],
+    };
+
+    await setCache(env, cacheKey, data, CACHE_TTLS.calendarReturns, requestId);
+    results[symbol] = data;
+  });
+
+  await Promise.all(promises);
+
+  log.info('Calendar returns complete', { requestId, symbolCount: symbols.length, ...cacheStats });
+  return jsonResponse(results);
+}
+
+// ============================================
+// COMPUTATION HELPERS
+// ============================================
+
+/**
+ * Compute daily returns from price array
+ */
+function computeDailyReturns(prices) {
+  if (!prices || prices.length < 2) return [];
+  const returns = [];
+  for (let i = 1; i < prices.length; i++) {
+    if (prices[i] > 0 && prices[i - 1] > 0) {
+      returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+    }
+  }
+  return returns;
+}
+
+/**
+ * Compute log returns from price array
+ */
+function computeLogReturns(prices) {
+  if (!prices || prices.length < 2) return [];
+  const returns = [];
+  for (let i = 1; i < prices.length; i++) {
+    if (prices[i] > 0 && prices[i - 1] > 0) {
+      returns.push(Math.log(prices[i] / prices[i - 1]));
+    }
+  }
+  return returns;
+}
+
+/**
+ * Compute beta and correlation vs benchmark
+ */
+function computeBetaCorrelation(returns, benchmarkReturns) {
+  // Align lengths
+  const len = Math.min(returns.length, benchmarkReturns.length);
+  if (len < 30) return { beta: null, correlation: null };
+
+  const r = returns.slice(-len);
+  const b = benchmarkReturns.slice(-len);
+
+  // Compute means
+  const meanR = r.reduce((a, v) => a + v, 0) / len;
+  const meanB = b.reduce((a, v) => a + v, 0) / len;
+
+  // Compute covariance and variances
+  let cov = 0, varR = 0, varB = 0;
+  for (let i = 0; i < len; i++) {
+    const diffR = r[i] - meanR;
+    const diffB = b[i] - meanB;
+    cov += diffR * diffB;
+    varR += diffR * diffR;
+    varB += diffB * diffB;
+  }
+
+  cov /= len;
+  varR /= len;
+  varB /= len;
+
+  const beta = varB > 0 ? cov / varB : null;
+  const correlation = (varR > 0 && varB > 0)
+    ? cov / (Math.sqrt(varR) * Math.sqrt(varB))
+    : null;
+
+  return {
+    beta: beta !== null ? Math.round(beta * 100) / 100 : null,
+    correlation: correlation !== null ? Math.round(correlation * 100) / 100 : null,
+  };
+}
+
+/**
+ * Compute annualized volatility from daily returns
+ */
+function computeAnnualizedVolatility(returns) {
+  if (!returns || returns.length < 30) return null;
+
+  const mean = returns.reduce((a, v) => a + v, 0) / returns.length;
+  const variance = returns.reduce((a, v) => a + (v - mean) ** 2, 0) / returns.length;
+  const dailyVol = Math.sqrt(variance);
+
+  // Annualize (252 trading days)
+  return Math.round(dailyVol * Math.sqrt(252) * 1000) / 1000;
+}
+
+/**
+ * Compute YTD, 1Y, 30D returns
+ */
+function computeReturns(prices, timestamps) {
+  if (!prices || prices.length < 2) {
+    return { ytdReturn: null, oneYearReturn: null, thirtyDayReturn: null };
+  }
+
+  const now = Date.now();
+  const currentYear = new Date().getFullYear();
+  const lastPrice = prices[prices.length - 1];
+
+  let ytdReturn = null;
+  let oneYearReturn = null;
+  let thirtyDayReturn = null;
+
+  // Find YTD start (first trading day of current year)
+  if (timestamps) {
+    for (let i = 0; i < timestamps.length; i++) {
+      const date = new Date(timestamps[i] * 1000);
+      if (date.getFullYear() === currentYear && prices[i] > 0) {
+        ytdReturn = (lastPrice - prices[i]) / prices[i];
+        break;
+      }
+    }
+  }
+
+  // 1 year return (252 trading days back)
+  const oneYearIdx = Math.max(0, prices.length - 253);
+  if (prices[oneYearIdx] > 0) {
+    oneYearReturn = (lastPrice - prices[oneYearIdx]) / prices[oneYearIdx];
+  }
+
+  // 30 day return
+  const thirtyDayIdx = Math.max(0, prices.length - 22);
+  if (prices[thirtyDayIdx] > 0) {
+    thirtyDayReturn = (lastPrice - prices[thirtyDayIdx]) / prices[thirtyDayIdx];
+  }
+
+  return {
+    ytdReturn: ytdReturn !== null ? Math.round(ytdReturn * 1000) / 1000 : null,
+    oneYearReturn: oneYearReturn !== null ? Math.round(oneYearReturn * 1000) / 1000 : null,
+    thirtyDayReturn: thirtyDayReturn !== null ? Math.round(thirtyDayReturn * 1000) / 1000 : null,
+  };
+}
+
+/**
+ * Bootstrap annual returns distribution
+ */
+function bootstrapAnnualReturns(logReturns, iterations = 1000) {
+  if (!logReturns || logReturns.length < 50) {
+    return { p5: null, p25: null, p50: null, p75: null, p95: null };
+  }
+
+  const tradingDaysPerYear = 252;
+  const annualReturns = [];
+
+  // Simple seeded random for reproducibility
+  let seed = 12345;
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+
+  for (let i = 0; i < iterations; i++) {
+    let cumReturn = 0;
+    for (let d = 0; d < tradingDaysPerYear; d++) {
+      const idx = Math.floor(random() * logReturns.length);
+      cumReturn += logReturns[idx];
+    }
+    // Convert log return to simple return
+    annualReturns.push(Math.exp(cumReturn) - 1);
+  }
+
+  // Sort and get percentiles
+  annualReturns.sort((a, b) => a - b);
+
+  const getPercentile = (arr, p) => {
+    const idx = Math.floor(p * arr.length);
+    return arr[Math.min(idx, arr.length - 1)];
+  };
+
+  return {
+    p5: Math.round(getPercentile(annualReturns, 0.05) * 1000) / 1000,
+    p25: Math.round(getPercentile(annualReturns, 0.25) * 1000) / 1000,
+    p50: Math.round(getPercentile(annualReturns, 0.50) * 1000) / 1000,
+    p75: Math.round(getPercentile(annualReturns, 0.75) * 1000) / 1000,
+    p95: Math.round(getPercentile(annualReturns, 0.95) * 1000) / 1000,
+  };
+}
+
+/**
+ * Compute calendar year returns
+ */
+function computeCalendarYearReturns(prices, timestamps) {
+  if (!prices || !timestamps || prices.length < 30) return {};
+
+  const years = {};
+  let currentYear = null;
+  let yearStartPrice = null;
+  let yearEndPrice = null;
+
+  for (let i = 0; i < prices.length; i++) {
+    const date = new Date(timestamps[i] * 1000);
+    const year = date.getFullYear();
+
+    if (year !== currentYear) {
+      // Save previous year's return
+      if (currentYear !== null && yearStartPrice > 0 && yearEndPrice > 0) {
+        years[currentYear] = Math.round((yearEndPrice - yearStartPrice) / yearStartPrice * 1000) / 1000;
+      }
+      // Start new year
+      currentYear = year;
+      yearStartPrice = prices[i];
+    }
+    yearEndPrice = prices[i];
+  }
+
+  // Save last year (partial or complete)
+  if (currentYear !== null && yearStartPrice > 0 && yearEndPrice > 0) {
+    years[currentYear] = Math.round((yearEndPrice - yearStartPrice) / yearStartPrice * 1000) / 1000;
+  }
+
+  return years;
 }

@@ -288,6 +288,147 @@ export async function getWorkerStatus() {
   return await fetchFromWorker('/health');
 }
 
+// ============================================
+// DERIVED METRICS (Pre-computed by Worker)
+// ============================================
+
+/**
+ * Fetch pre-computed beta values from Worker
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @param {string} benchmark - Benchmark symbol (default: SPY)
+ * @param {string} range - Time range (default: 1y)
+ * @returns {Promise<Object>} Map of symbol -> beta data
+ */
+export async function fetchBetas(symbols, benchmark = 'SPY', range = '1y') {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping beta fetch');
+    return null;
+  }
+
+  const data = await fetchFromWorker('/api/beta', {
+    symbols: symbols.join(','),
+    benchmark,
+    range,
+  });
+
+  if (data) {
+    console.log(`[MarketService] Fetched betas for ${Object.keys(data).length} symbols from Worker`);
+  }
+
+  return data;
+}
+
+/**
+ * Fetch pre-computed volatility and returns from Worker
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @param {string} range - Time range (default: 1y)
+ * @returns {Promise<Object>} Map of symbol -> volatility data
+ */
+export async function fetchVolatility(symbols, range = '1y') {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping volatility fetch');
+    return null;
+  }
+
+  const data = await fetchFromWorker('/api/volatility', {
+    symbols: symbols.join(','),
+    range,
+  });
+
+  if (data) {
+    console.log(`[MarketService] Fetched volatility for ${Object.keys(data).length} symbols from Worker`);
+  }
+
+  return data;
+}
+
+/**
+ * Fetch pre-computed distribution estimates from Worker
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @param {string} range - Time range for bootstrap (default: 5y)
+ * @param {number} bootstrap - Number of bootstrap iterations (default: 1000)
+ * @returns {Promise<Object>} Map of symbol -> distribution data (p5, p25, p50, p75, p95)
+ */
+export async function fetchDistributions(symbols, range = '5y', bootstrap = 1000) {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping distribution fetch');
+    return null;
+  }
+
+  const data = await fetchFromWorker('/api/distribution', {
+    symbols: symbols.join(','),
+    range,
+    bootstrap: String(bootstrap),
+  });
+
+  if (data) {
+    console.log(`[MarketService] Fetched distributions for ${Object.keys(data).length} symbols from Worker`);
+  }
+
+  return data;
+}
+
+/**
+ * Fetch pre-computed calendar year returns from Worker
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @param {string} range - Time range (default: 10y)
+ * @returns {Promise<Object>} Map of symbol -> { years: { 2024: 0.12, ... } }
+ */
+export async function fetchCalendarReturns(symbols, range = '10y') {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping calendar returns fetch');
+    return null;
+  }
+
+  const data = await fetchFromWorker('/api/calendar-returns', {
+    symbols: symbols.join(','),
+    range,
+  });
+
+  if (data) {
+    console.log(`[MarketService] Fetched calendar returns for ${Object.keys(data).length} symbols from Worker`);
+  }
+
+  return data;
+}
+
+/**
+ * Fetch all derived metrics in parallel
+ * Returns null for any that fail, allowing local fallback
+ *
+ * @param {string[]} symbols - Array of ticker symbols
+ * @returns {Promise<Object>} { betas, volatility, distributions, calendarReturns }
+ */
+export async function fetchAllDerivedMetrics(symbols) {
+  if (!isWorkerConfigured) {
+    return { betas: null, volatility: null, distributions: null, calendarReturns: null };
+  }
+
+  console.log(`[MarketService] Fetching all derived metrics for ${symbols.length} symbols...`);
+  const startTime = performance.now();
+
+  const [betas, volatility, distributions, calendarReturns] = await Promise.all([
+    fetchBetas(symbols).catch(() => null),
+    fetchVolatility(symbols).catch(() => null),
+    fetchDistributions(symbols).catch(() => null),
+    fetchCalendarReturns(symbols).catch(() => null),
+  ]);
+
+  const duration = Math.round(performance.now() - startTime);
+  console.log(`[MarketService] Derived metrics fetch complete in ${duration}ms`, {
+    betas: betas ? Object.keys(betas).length : 0,
+    volatility: volatility ? Object.keys(volatility).length : 0,
+    distributions: distributions ? Object.keys(distributions).length : 0,
+    calendarReturns: calendarReturns ? Object.keys(calendarReturns).length : 0,
+  });
+
+  return { betas, volatility, distributions, calendarReturns };
+}
+
 export default {
   isWorkerAvailable,
   fetchPrices,
@@ -296,4 +437,10 @@ export default {
   fetchExchangeRates,
   fetchConsensus,
   getWorkerStatus,
+  // Derived metrics
+  fetchBetas,
+  fetchVolatility,
+  fetchDistributions,
+  fetchCalendarReturns,
+  fetchAllDerivedMetrics,
 };
