@@ -1895,15 +1895,30 @@ function MonteCarloSimulator() {
       // Check in-memory cache first
       if (!forceRefresh && cached?.fetchedAt && Date.now() - cached.fetchedAt < UNIFIED_CACHE_MAX_AGE) {
         cachedTickers.push(ticker);
-        historyResults[ticker] = { ticker, data: cached.closePrices, cached: true };
+        historyResults[ticker] = {
+          ticker,
+          data: cached.closePrices,
+          currency: cached.currency || 'USD',
+          regularMarketPrice: cached.currentPrice,
+          cached: true
+        };
       }
       // For position tickers, check persistent cache if not in memory
       else if (!forceRefresh && tickers.includes(ticker) && positionPriceCache) {
         const cachedPrices = getCachedPrices(positionPriceCache, ticker);
         if (cachedPrices && cachedPrices.length > 0) {
           cachedTickers.push(ticker);
-          historyResults[ticker] = { ticker, data: cachedPrices, cached: true, fromPersistentCache: true };
-          console.log(`💾 Using persistent cache for ${ticker} (${cachedPrices.length} days)`);
+          // Try to get currency from existing unified data if available
+          const existingData = newData[ticker];
+          historyResults[ticker] = {
+            ticker,
+            data: cachedPrices,
+            currency: existingData?.currency || 'USD',
+            regularMarketPrice: existingData?.currentPrice,
+            cached: true,
+            fromPersistentCache: true
+          };
+          console.log(`💾 Using persistent cache for ${ticker} (${cachedPrices.length} days, ${existingData?.currency || 'USD'})`);
         } else {
           needsFetch.push(ticker);
         }
