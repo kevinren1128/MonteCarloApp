@@ -33,8 +33,9 @@ import { CorrelationTab, SimulationTab, OptimizeTab, PositionsTab, FactorsTab, E
 // Styles (extracted to reduce file size)
 import { styles } from './styles/appStyles';
 
-// Yahoo Finance API service
-import { fetchYahooQuote } from './services/yahooFinance';
+// Yahoo Finance API service - now routes through Cloudflare Worker with fallback
+import { fetchYahooQuote, fetchYahooHistory, fetchYahooProfile, fetchExchangeRate, fetchYahooData } from './services/yahooFinance';
+import { fetchPrices, fetchQuotes, fetchProfiles, fetchExchangeRates, isWorkerAvailable } from './services/marketService';
 
 // Position price cache for persistent storage
 import {
@@ -104,144 +105,10 @@ import {
 // Using Correlation Matrix as Primary Input
 // ============================================
 
-// Yahoo Finance API functions
-// Using allorigins as primary proxy since it's most reliable
-const fetchYahooData = async (url) => {
-  // Try with allorigins proxy (most reliable for Yahoo)
-  try {
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    const response = await fetch(proxyUrl);
-    if (response.ok) {
-      const data = await response.json();
-      if (data.contents) {
-        return JSON.parse(data.contents);
-      }
-    }
-  } catch (e) {
-    console.warn('allorigins proxy failed:', e.message);
-  }
-  
-  // Fallback: try corsproxy.io
-  try {
-    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-    const response = await fetch(proxyUrl);
-    if (response.ok) {
-      return await response.json();
-    }
-  } catch (e) {
-    console.warn('corsproxy.io failed:', e.message);
-  }
-  
-  // Last resort: try direct (works if CORS is disabled or same-origin)
-  try {
-    const response = await fetch(url);
-    if (response.ok) {
-      return await response.json();
-    }
-  } catch (e) {
-    console.warn('Direct fetch failed:', e.message);
-  }
-  
-  return null;
-};
-
-// Fetch currency exchange rate from Yahoo Finance
-const fetchExchangeRate = async (fromCurrency, toCurrency = 'USD') => {
-  if (fromCurrency === toCurrency) return 1;
-  
-  try {
-    // Yahoo uses format like EURUSD=X for forex pairs
-    const symbol = `${fromCurrency}${toCurrency}=X`;
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
-    const data = await fetchYahooData(url);
-    
-    if (data?.chart?.result?.[0]) {
-      const meta = data.chart.result[0].meta;
-      const rate = meta?.regularMarketPrice || meta?.previousClose;
-      if (rate) return rate;
-    }
-    
-    // Fallback: try reverse pair
-    const reverseSymbol = `${toCurrency}${fromCurrency}=X`;
-    const reverseUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${reverseSymbol}?interval=1d&range=1d`;
-    const reverseData = await fetchYahooData(reverseUrl);
-    
-    if (reverseData?.chart?.result?.[0]) {
-      const meta = reverseData.chart.result[0].meta;
-      const rate = meta?.regularMarketPrice || meta?.previousClose;
-      if (rate) return 1 / rate;
-    }
-    
-    return null;
-  } catch (error) {
-    console.warn(`Failed to fetch exchange rate ${fromCurrency}/${toCurrency}:`, error);
-    return null;
-  }
-};
-
-// Fetch detailed profile including sector/industry
-const fetchYahooProfile = async (symbol) => {
-  try {
-    // Try quoteSummary endpoint for detailed profile
-    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=assetProfile,summaryProfile,quoteType,summaryDetail`;
-    const data = await fetchYahooData(url);
-    
-    if (data?.quoteSummary?.result?.[0]) {
-      const result = data.quoteSummary.result[0];
-      const profile = result.assetProfile || result.summaryProfile || {};
-      const quoteType = result.quoteType || {};
-      
-      return {
-        sector: profile.sector || null,
-        industry: profile.industry || null,
-        longName: quoteType.longName || profile.longBusinessSummary?.slice(0, 100) || null,
-        quoteType: quoteType.quoteType || 'EQUITY',
-        shortName: quoteType.shortName || symbol,
-      };
-    }
-    return null;
-  } catch (error) {
-    console.warn(`Failed to fetch profile for ${symbol}:`, error);
-    return null;
-  }
-};
-
-const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') => {
-  try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`;
-    const data = await fetchYahooData(url);
-    
-    if (data?.chart?.result?.[0]) {
-      const result = data.chart.result[0];
-      const meta = result.meta;
-      const timestamps = result.timestamp || [];
-      const closes = result.indicators?.adjclose?.[0]?.adjclose || 
-                     result.indicators?.quote?.[0]?.close || [];
-      
-      const prices = [];
-      for (let i = 0; i < timestamps.length; i++) {
-        if (closes[i] != null) {
-          prices.push({
-            date: new Date(timestamps[i] * 1000),
-            close: closes[i],
-          });
-        }
-      }
-      
-      // Return currency info for conversion
-      return {
-        prices,
-        currency: meta?.currency || 'USD',
-        regularMarketPrice: meta?.regularMarketPrice,
-        previousClose: meta?.previousClose,
-      };
-    }
-    return null;
-  } catch (error) {
-    console.warn(`Failed to fetch history for ${symbol}:`, error);
-    return null;
-  }
-};
+// Yahoo Finance API functions are now imported from services/yahooFinance.js
+// They route through Cloudflare Worker (with KV cache) when available,
+// with fallback to direct Yahoo API via CORS proxies.
+// See: services/marketService.js for the Worker integration
 
 // Percentile Input Component - only commits on blur or Enter
 const PercentileInput = ({ value, onChange, color, min = -100, max = 100 }) => {

@@ -88,10 +88,60 @@ const saveToCache = (key, data) => {
 };
 
 // ============================================
-// CORS PROXY CONFIGURATION
+// CLOUDFLARE WORKER CONFIGURATION
 // ============================================
 
-// Custom proxy URL from environment (for Cloudflare Worker)
+// Cloudflare Worker URL for cached market data
+const WORKER_URL = typeof import.meta !== 'undefined'
+  ? import.meta.env?.VITE_WORKER_URL
+  : null;
+
+const isWorkerConfigured = WORKER_URL &&
+  !WORKER_URL.includes('your-subdomain') &&
+  !WORKER_URL.includes('undefined') &&
+  WORKER_URL.length > 0;
+
+/**
+ * Fetch from Cloudflare Worker API
+ * @param {string} endpoint - API endpoint (e.g., '/api/prices')
+ * @param {Object} params - Query parameters
+ * @returns {Promise<Object|null>}
+ */
+const fetchFromWorker = async (endpoint, params = {}) => {
+  if (!isWorkerConfigured) return null;
+
+  try {
+    const url = new URL(endpoint, WORKER_URL);
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        url.searchParams.set(key, String(value));
+      }
+    });
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url.toString(), {
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json' },
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      console.warn(`[YahooFinance] Worker fetch failed for ${endpoint}:`, error.message);
+    }
+    return null;
+  }
+};
+
+// ============================================
+// CORS PROXY CONFIGURATION (fallback)
+// ============================================
+
+// Custom proxy URL from environment (legacy)
 const CUSTOM_PROXY_URL = typeof import.meta !== 'undefined'
   ? import.meta.env?.VITE_CORS_PROXY_URL
   : null;
@@ -284,6 +334,16 @@ export const fetchYahooData = async (url, { timeout = 12000, retries = 2, useCac
  * @returns {Promise<{price: number, name: string, type: string, currency: string}|null>}
  */
 export const fetchYahooQuote = async (symbol) => {
+  // Try Cloudflare Worker first (shared cache - 15 min TTL)
+  if (isWorkerConfigured) {
+    const workerData = await fetchFromWorker('/api/quotes', { symbols: symbol });
+    if (workerData?.[symbol]?.price) {
+      console.log(`[YahooFinance] ✅ Got ${symbol} quote from Worker cache`);
+      return workerData[symbol];
+    }
+  }
+
+  // Fallback to direct fetch via CORS proxy
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=5d`;
     const data = await fetchYahooData(url);
@@ -322,6 +382,30 @@ export const fetchYahooQuote = async (symbol) => {
  * @returns {Promise<Array<{date: Date, close: number}>|null>}
  */
 export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') => {
+  // Try Cloudflare Worker first (shared cache)
+  if (isWorkerConfigured) {
+    const workerData = await fetchFromWorker('/api/prices', { symbols: symbol, range, interval });
+    if (workerData?.[symbol]) {
+      const d = workerData[symbol];
+      const prices = [];
+      const timestamps = d.timestamps || [];
+      const closes = d.prices || [];
+      for (let i = 0; i < timestamps.length; i++) {
+        if (closes[i] != null && !isNaN(closes[i])) {
+          prices.push({
+            date: new Date(timestamps[i] * 1000),
+            close: closes[i],
+          });
+        }
+      }
+      if (prices.length > 0) {
+        console.log(`[YahooFinance] ✅ Got ${symbol} history from Worker cache`);
+        return prices;
+      }
+    }
+  }
+
+  // Fallback to direct fetch via CORS proxy
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`;
     const data = await fetchYahooData(url);
@@ -394,6 +478,16 @@ export const fetchYahooHistoryRaw = async (symbol, range = '1y', interval = '1d'
  * @returns {Promise<{sector: string, industry: string, longName: string, quoteType: string}|null>}
  */
 export const fetchYahooProfile = async (symbol) => {
+  // Try Cloudflare Worker first (shared cache - 7 day TTL)
+  if (isWorkerConfigured) {
+    const workerData = await fetchFromWorker('/api/profile', { symbols: symbol });
+    if (workerData?.[symbol]) {
+      console.log(`[YahooFinance] ✅ Got ${symbol} profile from Worker cache`);
+      return workerData[symbol];
+    }
+  }
+
+  // Fallback to direct fetch via CORS proxy
   try {
     const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=assetProfile,summaryProfile,quoteType,summaryDetail`;
     const data = await fetchYahooData(url);
@@ -427,6 +521,18 @@ export const fetchYahooProfile = async (symbol) => {
 export const fetchExchangeRate = async (fromCurrency, toCurrency = 'USD') => {
   if (fromCurrency === toCurrency) return 1;
 
+  const pair = `${fromCurrency}${toCurrency}`;
+
+  // Try Cloudflare Worker first (shared cache - 24 hour TTL)
+  if (isWorkerConfigured) {
+    const workerData = await fetchFromWorker('/api/fx', { pairs: pair });
+    if (workerData?.[pair]?.rate) {
+      console.log(`[YahooFinance] ✅ Got ${pair} rate from Worker cache`);
+      return workerData[pair].rate;
+    }
+  }
+
+  // Fallback to direct fetch via CORS proxy
   try {
     const symbol = `${fromCurrency}${toCurrency}=X`;
     const reverseSymbol = `${toCurrency}${fromCurrency}=X`;
