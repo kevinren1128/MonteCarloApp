@@ -10,8 +10,8 @@ import {
   Sidebar,
 } from './components/common';
 
-// Hooks for autosave, undo/redo, and simulation
-import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation } from './hooks';
+// Hooks for autosave, undo/redo, simulation, and sync
+import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation, usePortfolioSync } from './hooks';
 
 // Auth components
 import { UserMenu } from './components/auth';
@@ -1068,6 +1068,20 @@ function MonteCarloSimulator() {
   // Auth state
   const { state: authState } = useAuth();
 
+  // Portfolio sync hook for Supabase persistence
+  const {
+    syncState,
+    loadFromServer,
+    savePositionsToServer,
+    saveCorrelationToServer,
+    saveSimulationToServer,
+    saveFactorsToServer,
+    saveOptimizationToServer,
+  } = usePortfolioSync({ debounceMs: 2000 });
+
+  // Track if we've loaded from server on login
+  const hasLoadedFromServerRef = React.useRef(false);
+
   // Load saved data on mount
   const savedData = useMemo(() => loadFromStorage(), []);
   
@@ -1511,7 +1525,164 @@ function MonteCarloSimulator() {
       console.warn('Failed to load unified cache:', e);
     }
   }, []);
-  
+
+  // ============================================
+  // SUPABASE SYNC - Load data on login
+  // ============================================
+  useEffect(() => {
+    const loadServerData = async () => {
+      if (!authState.isAuthenticated || hasLoadedFromServerRef.current) {
+        return;
+      }
+
+      console.log('[App] User logged in, loading data from server...');
+      hasLoadedFromServerRef.current = true;
+
+      const { data, error } = await loadFromServer();
+
+      if (error) {
+        console.error('[App] Failed to load from server:', error);
+        return;
+      }
+
+      if (data) {
+        console.log('[App] Restoring state from server:', {
+          positions: data.positions?.length || 0,
+          hasCorrelation: !!data.editedCorrelation,
+          hasSimulation: !!data.simulationResults,
+          hasFactors: !!data.factorAnalysis,
+          hasOptimization: !!data.optimizationResults,
+        });
+
+        // Restore positions
+        if (data.positions && data.positions.length > 0) {
+          setPositions(data.positions.map(p => ({
+            id: p.id || Date.now() + Math.random(),
+            ticker: p.ticker,
+            quantity: p.quantity,
+            price: p.price,
+            avgCost: p.avgCost,
+            type: p.type || 'Equity',
+            p5: p.p5 ?? -0.25,
+            p25: p.p25 ?? -0.05,
+            p50: p.p50 ?? 0.08,
+            p75: p.p75 ?? 0.20,
+            p95: p.p95 ?? 0.40,
+          })));
+        }
+
+        // Restore cash balance
+        if (data.cashBalance != null) {
+          setCashBalance(data.cashBalance);
+        }
+
+        // Restore edited correlation
+        if (data.editedCorrelation) {
+          setEditedCorrelation(data.editedCorrelation);
+          setCorrelationMethod(data.correlationMethod || 'shrinkage');
+        }
+
+        // Restore simulation results
+        if (data.simulationResults) {
+          setSimulationResults(data.simulationResults);
+        }
+
+        // Restore factor analysis
+        if (data.factorAnalysis) {
+          setFactorAnalysis(data.factorAnalysis);
+        }
+
+        // Restore optimization results
+        if (data.optimizationResults) {
+          setOptimizationResults(data.optimizationResults);
+        }
+
+        showToast({ type: 'success', message: 'Portfolio synced from cloud', duration: 3000 });
+      }
+    };
+
+    loadServerData();
+  }, [authState.isAuthenticated, loadFromServer, showToast]);
+
+  // Reset load flag when user logs out
+  useEffect(() => {
+    if (!authState.isAuthenticated) {
+      hasLoadedFromServerRef.current = false;
+    }
+  }, [authState.isAuthenticated]);
+
+  // ============================================
+  // SUPABASE SYNC - Save positions on change (debounced)
+  // ============================================
+  const lastSavedPositionsRef = useRef(null);
+
+  useEffect(() => {
+    if (!authState.isAuthenticated || !positions || positions.length === 0) {
+      return;
+    }
+
+    // Skip if positions haven't actually changed
+    const positionsKey = JSON.stringify(positions.map(p => ({
+      ticker: p.ticker, quantity: p.quantity, p5: p.p5, p25: p.p25, p50: p.p50, p75: p.p75, p95: p.p95
+    })));
+
+    if (positionsKey === lastSavedPositionsRef.current) {
+      return;
+    }
+    lastSavedPositionsRef.current = positionsKey;
+
+    // Debounced save
+    savePositionsToServer(positions, cashBalance);
+  }, [authState.isAuthenticated, positions, cashBalance, savePositionsToServer]);
+
+  // ============================================
+  // SUPABASE SYNC - Save correlation on change
+  // ============================================
+  useEffect(() => {
+    if (!authState.isAuthenticated || !editedCorrelation) {
+      return;
+    }
+
+    const tickers = positions.map(p => p.ticker);
+    saveCorrelationToServer(editedCorrelation, correlationMethod, tickers);
+  }, [authState.isAuthenticated, editedCorrelation, correlationMethod, positions, saveCorrelationToServer]);
+
+  // ============================================
+  // SUPABASE SYNC - Save simulation results on change
+  // ============================================
+  useEffect(() => {
+    if (!authState.isAuthenticated || !simulationResults) {
+      return;
+    }
+
+    // Only save if we have meaningful results
+    if (simulationResults.mean != null || simulationResults.percentiles) {
+      saveSimulationToServer(simulationResults);
+    }
+  }, [authState.isAuthenticated, simulationResults, saveSimulationToServer]);
+
+  // ============================================
+  // SUPABASE SYNC - Save factor results on change
+  // ============================================
+  useEffect(() => {
+    if (!authState.isAuthenticated || !factorAnalysis) {
+      return;
+    }
+
+    saveFactorsToServer(factorAnalysis);
+  }, [authState.isAuthenticated, factorAnalysis, saveFactorsToServer]);
+
+  // ============================================
+  // SUPABASE SYNC - Save optimization results on change
+  // ============================================
+  useEffect(() => {
+    if (!authState.isAuthenticated || !optimizationResults) {
+      return;
+    }
+
+    saveOptimizationToServer(optimizationResults);
+  }, [authState.isAuthenticated, optimizationResults, saveOptimizationToServer]);
+
   // Window resize listener for responsive header
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
@@ -6388,6 +6559,7 @@ function MonteCarloSimulator() {
           },
         }}
         UserMenu={UserMenu}
+        syncState={syncState}
       />
 
       {/* Main Content Area */}

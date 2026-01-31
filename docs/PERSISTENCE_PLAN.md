@@ -77,15 +77,15 @@ VITE_SUPABASE_ANON_KEY=sb_publishable_ERomnJZe6GkrmOYlmy0sRw_4xrC_E9u
 8. `reports` - Generated report history
 9. `market_data_cache` - Optional per-user price cache
 
-### ✅ Phase 3: Portfolio Service (COMPLETE - Code exists, not wired up)
+### ✅ Phase 3: Portfolio Service (COMPLETE)
 - [x] Create `src/services/portfolioService.js` - CRUD operations
-- [x] Create `src/hooks/usePortfolioSync.js` - Sync hook with conflict resolution
-- [ ] **Wire up usePortfolioSync to App.jsx state** ← NEXT
-- [ ] Save positions with distribution params
-- [ ] Save correlation overrides
-- [ ] Save simulation results
-- [ ] Save factor results
-- [ ] Save optimization results
+- [x] Create `src/hooks/usePortfolioSync.js` - Sync hook
+- [x] **Wire up usePortfolioSync to App.jsx state**
+- [x] Save positions with distribution params (on change, debounced)
+- [x] Save correlation overrides (on change)
+- [x] Save simulation results (after simulation runs)
+- [x] Save factor results (after factor analysis)
+- [x] Save optimization results (after optimization)
 
 ### 🔲 Phase 4: Cloudflare Worker (NOT STARTED)
 - [ ] Create Cloudflare account
@@ -104,18 +104,18 @@ GET /api/consensus?symbols=AAPL
 GET /api/fx?pairs=EURUSD,GBPUSD
 ```
 
-### 🔲 Phase 5: Frontend Data Sync (NOT STARTED)
-- [ ] Update portfolioService.js to save all data types
-- [ ] Modify App.jsx to call sync on:
-  - Position changes
-  - Distribution param changes
+### ✅ Phase 5: Frontend Data Sync (COMPLETE)
+- [x] Update portfolioService.js to save all data types
+- [x] Modify App.jsx to call sync on:
+  - Position changes (debounced 2s)
+  - Distribution param changes (with positions)
   - Correlation matrix edits
   - After simulation runs
   - After factor analysis
   - After optimization
-- [ ] Add sync status indicator
-- [ ] Handle offline mode gracefully
-- [ ] Test cross-device sync
+- [x] Add sync status indicator (in UserMenu)
+- [x] Handle offline mode gracefully
+- [ ] Test cross-device sync (manual test needed)
 
 ### 🔲 Phase 6: Vercel Deployment (NOT STARTED)
 - [ ] Connect GitHub repo to Vercel
@@ -160,10 +160,11 @@ wrangler.toml            ✅ Cloudflare config (needs namespace ID)
 
 ## Next Steps (in order)
 
-1. **Wire up data sync** - Connect usePortfolioSync to actual app state
+1. ~~**Wire up data sync**~~ ✅ COMPLETE - Data syncs automatically on login and on change
 2. **Set up Cloudflare Worker** - Deploy for shared market data cache
-3. **Extend portfolioService** - Add methods for simulation/factor/optimization results
+3. ~~**Extend portfolioService**~~ ✅ COMPLETE - All data types now supported
 4. **Deploy to Vercel** - Production deployment with real URLs
+5. **Test cross-device sync** - Verify data loads correctly on different devices
 
 ---
 

@@ -7,11 +7,16 @@ import { GoogleSignIn } from './GoogleSignIn';
  * Shows user avatar and dropdown with account options when logged in,
  * or a sign-in button when logged out.
  */
-export function UserMenu({ syncStatus = 'idle', onSync }) {
+export function UserMenu({ syncState = { status: 'idle' } }) {
   const { state, logout } = useAuth();
   const { isAuthenticated, isAvailable, displayInfo, isLoading } = state;
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
+
+  // Extract sync status from syncState object
+  const syncStatus = syncState?.status || 'idle';
+  const lastSynced = syncState?.lastSynced;
+  const hasUnsyncedChanges = syncState?.hasUnsyncedChanges;
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -70,7 +75,7 @@ export function UserMenu({ syncStatus = 'idle', onSync }) {
       case 'syncing':
         return (
           <svg width="12" height="12" viewBox="0 0 24 24" style={{ animation: 'spin 1s linear infinite' }}>
-            <path fill="currentColor" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+            <path fill="#4285f4" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
           </svg>
         );
       case 'synced':
@@ -85,9 +90,32 @@ export function UserMenu({ syncStatus = 'idle', onSync }) {
             <path fill="#EA4335" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
           </svg>
         );
+      case 'offline':
+        return (
+          <svg width="12" height="12" viewBox="0 0 24 24">
+            <path fill="#FBBC04" d="M19.35 10.04C18.67 6.59 15.64 4 12 4c-1.48 0-2.85.43-4.01 1.17l1.46 1.46C10.21 6.23 11.08 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19c1.66 0 3 1.34 3 3 0 .99-.49 1.87-1.24 2.41l1.46 1.46C23.34 17.85 24 16.51 24 15c0-2.64-2.05-4.78-4.65-4.96zM3 5.27l2.75 2.74C2.56 8.15 0 10.77 0 14c0 2.76 2.24 5 5 5h11.73l2 2L20 19.73 4.27 4 3 5.27zM7.73 10l8 8H5c-1.66 0-3-1.34-3-3s1.34-3 3-3h2.73z"/>
+          </svg>
+        );
       default:
         return null;
     }
+  };
+
+  const getLastSyncedText = () => {
+    if (!lastSynced) return null;
+    const now = new Date();
+    const diff = now - new Date(lastSynced);
+    const minutes = Math.floor(diff / 60000);
+
+    if (minutes < 1) return 'Just now';
+    if (minutes === 1) return '1 minute ago';
+    if (minutes < 60) return `${minutes} minutes ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours === 1) return '1 hour ago';
+    if (hours < 24) return `${hours} hours ago`;
+
+    return lastSynced.toLocaleDateString();
   };
 
   return (
@@ -126,18 +154,33 @@ export function UserMenu({ syncStatus = 'idle', onSync }) {
 
           <div style={styles.divider} />
 
-          {onSync && (
-            <button
-              onClick={() => { setIsOpen(false); onSync(); }}
-              style={styles.menuItem}
-              disabled={syncStatus === 'syncing'}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" style={{ marginRight: '8px' }}>
-                <path fill="currentColor" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+          {/* Sync status */}
+          <div style={styles.syncStatus}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24">
+                <path fill={syncStatus === 'synced' ? '#34A853' : syncStatus === 'error' ? '#EA4335' : '#5f6368'} d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
               </svg>
-              {syncStatus === 'syncing' ? 'Syncing...' : 'Sync now'}
-            </button>
-          )}
+              <span>
+                {syncStatus === 'syncing' ? 'Syncing...' :
+                 syncStatus === 'synced' ? 'Synced' :
+                 syncStatus === 'error' ? 'Sync error' :
+                 syncStatus === 'offline' ? 'Offline' :
+                 'Cloud sync'}
+              </span>
+            </div>
+            {lastSynced && syncStatus === 'synced' && (
+              <div style={{ fontSize: '11px', color: '#9aa0a6', marginTop: '2px', marginLeft: '24px' }}>
+                {getLastSyncedText()}
+              </div>
+            )}
+            {hasUnsyncedChanges && syncStatus !== 'syncing' && (
+              <div style={{ fontSize: '11px', color: '#FBBC04', marginTop: '2px', marginLeft: '24px' }}>
+                Changes pending...
+              </div>
+            )}
+          </div>
+
+          <div style={styles.divider} />
 
           <button onClick={handleLogout} style={styles.menuItem}>
             <svg width="16" height="16" viewBox="0 0 24 24" style={{ marginRight: '8px' }}>
@@ -237,6 +280,11 @@ const styles = {
     height: '1px',
     background: '#e0e0e0',
     margin: '0',
+  },
+  syncStatus: {
+    padding: '12px 16px',
+    fontSize: '13px',
+    color: '#5f6368',
   },
   menuItem: {
     display: 'flex',

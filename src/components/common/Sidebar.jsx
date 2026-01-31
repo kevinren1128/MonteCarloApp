@@ -43,8 +43,7 @@ const Sidebar = memo(({
   tabStatus = {},
   // Auth
   UserMenu,
-  syncStatus,
-  onSync,
+  syncState,
 }) => {
   const sidebarWidth = isExpanded ? 220 : 56;
 
@@ -387,7 +386,7 @@ const Sidebar = memo(({
           justifyContent: isExpanded ? 'flex-start' : 'center',
           flexShrink: 0,
         }}>
-          <UserMenu syncStatus={syncStatus} onSync={onSync} />
+          <UserMenu syncState={syncState} />
         </div>
       )}
 

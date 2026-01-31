@@ -2,191 +2,474 @@
  * Portfolio Service - Supabase CRUD Operations
  *
  * @module services/portfolioService
- * @description Handles portfolio data persistence with Supabase PostgreSQL.
+ * @description Handles all user data persistence with Supabase PostgreSQL.
  *
- * Database Schema (in Supabase):
- * - portfolios: id, user_id, name, cash_balance, revision, created_at, updated_at
- * - positions: id, portfolio_id, symbol, shares, avg_cost, created_at, updated_at
- * - portfolio_settings: portfolio_id, settings (JSONB), updated_at
+ * Tables:
+ * - portfolios: id, user_id, name, cash_balance, revision
+ * - positions: id, portfolio_id, symbol, shares, avg_cost, p5-p95, price, type
+ * - portfolio_settings: portfolio_id, settings (JSONB)
+ * - correlation_overrides: portfolio_id, correlation_matrix, method, tickers
+ * - simulation_results: portfolio_id, stats, percentiles, paths
+ * - factor_results: portfolio_id, exposures, betas, r_squared
+ * - optimization_results: portfolio_id, weights, frontier, metrics
  */
 
 import { supabase, isAuthAvailable, getUser } from './authService';
 
 // ============================================
-// PORTFOLIO OPERATIONS
+// HELPER: Get or Create Portfolio
 // ============================================
 
 /**
- * Fetch the user's portfolio with all positions and settings
- * @returns {Promise<{portfolio: Object|null, error: Error|null}>}
+ * Get user's portfolio ID, creating one if needed
  */
-export async function fetchPortfolio() {
+async function getOrCreatePortfolioId() {
   if (!supabase || !isAuthAvailable()) {
-    return { portfolio: null, error: null };
+    return { portfolioId: null, error: new Error('Not available') };
+  }
+
+  const { data: { user }, error: userError } = await getUser();
+  if (userError || !user) {
+    return { portfolioId: null, error: userError || new Error('Not authenticated') };
+  }
+
+  // Try to get existing portfolio
+  const { data: existing } = await supabase
+    .from('portfolios')
+    .select('id')
+    .eq('user_id', user.id)
+    .limit(1)
+    .single();
+
+  if (existing?.id) {
+    return { portfolioId: existing.id, userId: user.id, error: null };
+  }
+
+  // Create new portfolio
+  const { data: created, error: createError } = await supabase
+    .from('portfolios')
+    .insert({ user_id: user.id, name: 'My Portfolio', cash_balance: 0 })
+    .select('id')
+    .single();
+
+  if (createError) {
+    return { portfolioId: null, error: createError };
+  }
+
+  return { portfolioId: created.id, userId: user.id, error: null };
+}
+
+// ============================================
+// FULL DATA FETCH (Load Everything)
+// ============================================
+
+/**
+ * Fetch all user data from Supabase
+ * Call this on login to restore full state
+ */
+export async function fetchAllData() {
+  if (!supabase || !isAuthAvailable()) {
+    return { data: null, error: null };
   }
 
   try {
     const { data: { user }, error: userError } = await getUser();
     if (userError || !user) {
-      return { portfolio: null, error: userError };
+      return { data: null, error: userError };
     }
 
-    // Fetch portfolio with positions and settings
+    // Fetch portfolio with all related data
     const { data: portfolios, error } = await supabase
       .from('portfolios')
       .select(`
         *,
         positions (*),
-        portfolio_settings (settings)
+        portfolio_settings (settings),
+        correlation_overrides (correlation_matrix, method, tickers),
+        simulation_results (*, created_at),
+        factor_results (*, created_at),
+        optimization_results (*, created_at)
       `)
       .eq('user_id', user.id)
       .order('created_at', { ascending: true })
       .limit(1);
 
     if (error) {
-      console.error('Error fetching portfolio:', error);
-      return { portfolio: null, error };
+      console.error('[PortfolioService] Fetch error:', error);
+      return { data: null, error };
     }
 
     if (!portfolios || portfolios.length === 0) {
-      return { portfolio: null, error: null };
+      console.log('[PortfolioService] No portfolio found for user');
+      return { data: null, error: null };
     }
 
-    const portfolio = portfolios[0];
+    const p = portfolios[0];
+
+    // Get most recent results (they're ordered by created_at in the query)
+    const latestSimulation = p.simulation_results?.sort((a, b) =>
+      new Date(b.created_at) - new Date(a.created_at)
+    )[0];
+
+    const latestFactor = p.factor_results?.sort((a, b) =>
+      new Date(b.created_at) - new Date(a.created_at)
+    )[0];
+
+    const latestOptimization = p.optimization_results?.sort((a, b) =>
+      new Date(b.created_at) - new Date(a.created_at)
+    )[0];
 
     // Transform to app format
-    return {
-      portfolio: {
-        id: portfolio.id,
-        name: portfolio.name,
-        cash: portfolio.cash_balance,
-        revision: portfolio.revision,
-        positions: (portfolio.positions || []).map(p => ({
-          id: p.id,
-          symbol: p.symbol,
-          shares: parseFloat(p.shares),
-          avgCost: p.avg_cost ? parseFloat(p.avg_cost) : null,
-        })),
-        settings: portfolio.portfolio_settings?.settings || {},
-        updatedAt: portfolio.updated_at,
-      },
-      error: null,
+    const data = {
+      portfolioId: p.id,
+      revision: p.revision,
+
+      // Cash balance
+      cashBalance: parseFloat(p.cash_balance) || 0,
+
+      // Positions with distribution params
+      positions: (p.positions || []).map(pos => ({
+        id: pos.id,
+        ticker: pos.symbol,
+        quantity: parseFloat(pos.shares) || 0,
+        price: pos.price ? parseFloat(pos.price) : null,
+        avgCost: pos.avg_cost ? parseFloat(pos.avg_cost) : null,
+        type: pos.position_type || 'Equity',
+        // Distribution parameters
+        p5: pos.p5 != null ? parseFloat(pos.p5) : -0.25,
+        p25: pos.p25 != null ? parseFloat(pos.p25) : -0.05,
+        p50: pos.p50 != null ? parseFloat(pos.p50) : 0.08,
+        p75: pos.p75 != null ? parseFloat(pos.p75) : 0.20,
+        p95: pos.p95 != null ? parseFloat(pos.p95) : 0.40,
+      })),
+
+      // Settings
+      settings: p.portfolio_settings?.settings || {},
+
+      // Correlation matrix
+      editedCorrelation: p.correlation_overrides?.correlation_matrix || null,
+      correlationMethod: p.correlation_overrides?.method || 'shrinkage',
+      correlationTickers: p.correlation_overrides?.tickers || [],
+
+      // Latest simulation results
+      simulationResults: latestSimulation ? {
+        mean: latestSimulation.mean_return,
+        median: latestSimulation.median_return,
+        stdDev: latestSimulation.std_dev,
+        var95: latestSimulation.var_95,
+        cvar95: latestSimulation.cvar_95,
+        sharpe: latestSimulation.sharpe_ratio,
+        maxDrawdown: latestSimulation.max_drawdown,
+        percentiles: latestSimulation.percentiles,
+        pathEndpoints: latestSimulation.path_endpoints,
+        numPaths: latestSimulation.num_paths,
+        method: latestSimulation.method,
+      } : null,
+
+      // Latest factor analysis
+      factorAnalysis: latestFactor ? {
+        exposures: latestFactor.factor_exposures,
+        rSquared: latestFactor.r_squared,
+        residualVol: latestFactor.residual_vol,
+        positionBetas: latestFactor.position_betas,
+        riskContribution: latestFactor.risk_contribution,
+      } : null,
+
+      // Latest optimization
+      optimizationResults: latestOptimization ? {
+        objective: latestOptimization.objective,
+        constraints: latestOptimization.constraints,
+        optimalWeights: latestOptimization.optimal_weights,
+        expectedReturn: latestOptimization.expected_return,
+        expectedVolatility: latestOptimization.expected_volatility,
+        sharpe: latestOptimization.sharpe_ratio,
+        efficientFrontier: latestOptimization.efficient_frontier,
+        currentMetrics: latestOptimization.current_metrics,
+        improvement: latestOptimization.improvement,
+      } : null,
     };
+
+    console.log('[PortfolioService] Loaded data:', {
+      positions: data.positions.length,
+      hasCorrelation: !!data.editedCorrelation,
+      hasSimulation: !!data.simulationResults,
+      hasFactors: !!data.factorAnalysis,
+      hasOptimization: !!data.optimizationResults,
+    });
+
+    return { data, error: null };
   } catch (error) {
-    console.error('Error in fetchPortfolio:', error);
-    return { portfolio: null, error };
+    console.error('[PortfolioService] fetchAllData error:', error);
+    return { data: null, error };
   }
 }
 
+// ============================================
+// SAVE POSITIONS
+// ============================================
+
 /**
- * Save portfolio to Supabase
- * Creates a new portfolio if none exists, or updates existing
- * @param {Object} portfolio - Portfolio data from app state
- * @returns {Promise<{portfolio: Object|null, error: Error|null}>}
+ * Save positions with distribution parameters
  */
-export async function savePortfolio(portfolio) {
-  if (!supabase || !isAuthAvailable()) {
-    return { portfolio: null, error: new Error('Database not available') };
+export async function savePositions(positions, cashBalance = 0) {
+  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  if (idError || !portfolioId) {
+    return { success: false, error: idError };
   }
 
   try {
-    const { data: { user }, error: userError } = await getUser();
-    if (userError || !user) {
-      return { portfolio: null, error: userError || new Error('Not authenticated') };
-    }
-
-    // Upsert portfolio
-    const { data: savedPortfolio, error: portfolioError } = await supabase
+    // Update cash balance
+    await supabase
       .from('portfolios')
-      .upsert({
-        id: portfolio.id || undefined, // Let DB generate if new
-        user_id: user.id,
-        name: portfolio.name || 'My Portfolio',
-        cash_balance: portfolio.cash || 0,
-      }, {
-        onConflict: 'id',
-      })
-      .select()
-      .single();
+      .update({ cash_balance: cashBalance })
+      .eq('id', portfolioId);
 
-    if (portfolioError) {
-      console.error('Error saving portfolio:', portfolioError);
-      return { portfolio: null, error: portfolioError };
-    }
+    // Delete existing positions
+    await supabase
+      .from('positions')
+      .delete()
+      .eq('portfolio_id', portfolioId);
 
-    const portfolioId = savedPortfolio.id;
-
-    // Replace all positions (delete then insert for simplicity)
-    if (portfolio.positions && portfolio.positions.length > 0) {
-      // Delete existing positions
-      await supabase
-        .from('positions')
-        .delete()
-        .eq('portfolio_id', portfolioId);
-
-      // Insert new positions
-      const positionsToInsert = portfolio.positions.map(p => ({
+    // Insert new positions
+    if (positions && positions.length > 0) {
+      const positionsToInsert = positions.map(p => ({
         portfolio_id: portfolioId,
-        symbol: p.symbol || p.ticker,
-        shares: p.shares || p.quantity || 0,
+        symbol: p.ticker || p.symbol,
+        shares: p.quantity || p.shares || 0,
         avg_cost: p.avgCost || p.averageCost || null,
+        price: p.price || null,
+        position_type: p.type || 'Equity',
+        p5: p.p5,
+        p25: p.p25,
+        p50: p.p50,
+        p75: p.p75,
+        p95: p.p95,
       }));
 
-      const { error: positionsError } = await supabase
+      const { error: insertError } = await supabase
         .from('positions')
         .insert(positionsToInsert);
 
-      if (positionsError) {
-        console.error('Error saving positions:', positionsError);
-        // Don't fail completely if positions fail
-      }
-    } else {
-      // Clear all positions if empty
-      await supabase
-        .from('positions')
-        .delete()
-        .eq('portfolio_id', portfolioId);
-    }
-
-    // Save settings if provided
-    if (portfolio.settings) {
-      const { error: settingsError } = await supabase
-        .from('portfolio_settings')
-        .upsert({
-          portfolio_id: portfolioId,
-          settings: portfolio.settings,
-        }, {
-          onConflict: 'portfolio_id',
-        });
-
-      if (settingsError) {
-        console.error('Error saving settings:', settingsError);
+      if (insertError) {
+        console.error('[PortfolioService] Save positions error:', insertError);
+        return { success: false, error: insertError };
       }
     }
 
-    return {
-      portfolio: {
-        ...portfolio,
-        id: portfolioId,
-        revision: savedPortfolio.revision,
-        updatedAt: savedPortfolio.updated_at,
-      },
-      error: null,
-    };
+    console.log('[PortfolioService] Saved', positions?.length || 0, 'positions');
+    return { success: true, error: null };
   } catch (error) {
-    console.error('Error in savePortfolio:', error);
-    return { portfolio: null, error };
+    console.error('[PortfolioService] savePositions error:', error);
+    return { success: false, error };
   }
 }
 
+// ============================================
+// SAVE CORRELATION MATRIX
+// ============================================
+
 /**
- * Delete a portfolio and all associated data
- * @param {string} portfolioId - Portfolio UUID
- * @returns {Promise<{success: boolean, error: Error|null}>}
+ * Save edited correlation matrix
  */
-export async function deletePortfolio(portfolioId) {
-  if (!supabase || !isAuthAvailable()) {
-    return { success: false, error: new Error('Database not available') };
+export async function saveCorrelation(correlationMatrix, method, tickers) {
+  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  if (idError || !portfolioId) {
+    return { success: false, error: idError };
+  }
+
+  try {
+    const { error } = await supabase
+      .from('correlation_overrides')
+      .upsert({
+        portfolio_id: portfolioId,
+        correlation_matrix: correlationMatrix,
+        method: method || 'historical',
+        tickers: tickers || [],
+      }, { onConflict: 'portfolio_id' });
+
+    if (error) {
+      console.error('[PortfolioService] Save correlation error:', error);
+      return { success: false, error };
+    }
+
+    console.log('[PortfolioService] Saved correlation matrix');
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('[PortfolioService] saveCorrelation error:', error);
+    return { success: false, error };
+  }
+}
+
+// ============================================
+// SAVE SIMULATION RESULTS
+// ============================================
+
+/**
+ * Save simulation results
+ */
+export async function saveSimulationResults(results) {
+  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  if (idError || !portfolioId) {
+    return { success: false, error: idError };
+  }
+
+  try {
+    const { error } = await supabase
+      .from('simulation_results')
+      .insert({
+        portfolio_id: portfolioId,
+        num_paths: results.numPaths || results.paths?.length || 0,
+        method: results.method || 'quasi-monte-carlo',
+        mean_return: results.mean,
+        median_return: results.median,
+        std_dev: results.stdDev,
+        var_95: results.var95 || results.percentiles?.p5,
+        cvar_95: results.cvar95,
+        sharpe_ratio: results.sharpe,
+        max_drawdown: results.maxDrawdown,
+        percentiles: results.percentiles,
+        // Only save endpoints, not full paths (too large)
+        path_endpoints: results.pathEndpoints || results.paths?.map(p => p[p.length - 1]),
+      });
+
+    if (error) {
+      console.error('[PortfolioService] Save simulation error:', error);
+      return { success: false, error };
+    }
+
+    console.log('[PortfolioService] Saved simulation results');
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('[PortfolioService] saveSimulationResults error:', error);
+    return { success: false, error };
+  }
+}
+
+// ============================================
+// SAVE FACTOR RESULTS
+// ============================================
+
+/**
+ * Save factor analysis results
+ */
+export async function saveFactorResults(results) {
+  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  if (idError || !portfolioId) {
+    return { success: false, error: idError };
+  }
+
+  try {
+    const { error } = await supabase
+      .from('factor_results')
+      .insert({
+        portfolio_id: portfolioId,
+        factor_exposures: results.exposures || results.factorExposures,
+        r_squared: results.rSquared,
+        residual_vol: results.residualVol,
+        position_betas: results.positionBetas,
+        risk_contribution: results.riskContribution,
+      });
+
+    if (error) {
+      console.error('[PortfolioService] Save factor error:', error);
+      return { success: false, error };
+    }
+
+    console.log('[PortfolioService] Saved factor results');
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('[PortfolioService] saveFactorResults error:', error);
+    return { success: false, error };
+  }
+}
+
+// ============================================
+// SAVE OPTIMIZATION RESULTS
+// ============================================
+
+/**
+ * Save optimization results
+ */
+export async function saveOptimizationResults(results) {
+  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  if (idError || !portfolioId) {
+    return { success: false, error: idError };
+  }
+
+  try {
+    const { error } = await supabase
+      .from('optimization_results')
+      .insert({
+        portfolio_id: portfolioId,
+        objective: results.objective || 'max_sharpe',
+        constraints: results.constraints,
+        optimal_weights: results.optimalWeights || results.weights,
+        expected_return: results.expectedReturn,
+        expected_volatility: results.expectedVolatility || results.volatility,
+        sharpe_ratio: results.sharpe,
+        efficient_frontier: results.efficientFrontier,
+        current_metrics: results.currentMetrics,
+        improvement: results.improvement,
+      });
+
+    if (error) {
+      console.error('[PortfolioService] Save optimization error:', error);
+      return { success: false, error };
+    }
+
+    console.log('[PortfolioService] Saved optimization results');
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('[PortfolioService] saveOptimizationResults error:', error);
+    return { success: false, error };
+  }
+}
+
+// ============================================
+// SAVE SETTINGS
+// ============================================
+
+/**
+ * Save user settings (UI preferences, defaults, etc.)
+ */
+export async function saveSettings(settings) {
+  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  if (idError || !portfolioId) {
+    return { success: false, error: idError };
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portfolio_settings')
+      .upsert({
+        portfolio_id: portfolioId,
+        settings,
+      }, { onConflict: 'portfolio_id' });
+
+    if (error) {
+      console.error('[PortfolioService] Save settings error:', error);
+      return { success: false, error };
+    }
+
+    console.log('[PortfolioService] Saved settings');
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('[PortfolioService] saveSettings error:', error);
+    return { success: false, error };
+  }
+}
+
+// ============================================
+// DELETE PORTFOLIO
+// ============================================
+
+/**
+ * Delete portfolio and all associated data
+ */
+export async function deletePortfolio() {
+  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  if (idError || !portfolioId) {
+    return { success: false, error: idError };
   }
 
   try {
@@ -196,242 +479,29 @@ export async function deletePortfolio(portfolioId) {
       .eq('id', portfolioId);
 
     if (error) {
-      console.error('Error deleting portfolio:', error);
+      console.error('[PortfolioService] Delete error:', error);
       return { success: false, error };
     }
 
+    console.log('[PortfolioService] Deleted portfolio');
     return { success: true, error: null };
   } catch (error) {
-    console.error('Error in deletePortfolio:', error);
+    console.error('[PortfolioService] deletePortfolio error:', error);
     return { success: false, error };
   }
 }
 
 // ============================================
-// POSITION OPERATIONS
+// UTILITY
 // ============================================
 
 /**
- * Add a single position to a portfolio
- * @param {string} portfolioId - Portfolio UUID
- * @param {Object} position - Position data {symbol, shares, avgCost}
- * @returns {Promise<{position: Object|null, error: Error|null}>}
+ * Check if sync is available (auth configured + user logged in)
  */
-export async function addPosition(portfolioId, position) {
-  if (!supabase || !isAuthAvailable()) {
-    return { position: null, error: new Error('Database not available') };
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('positions')
-      .insert({
-        portfolio_id: portfolioId,
-        symbol: position.symbol,
-        shares: position.shares,
-        avg_cost: position.avgCost || null,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error adding position:', error);
-      return { position: null, error };
-    }
-
-    return {
-      position: {
-        id: data.id,
-        symbol: data.symbol,
-        shares: parseFloat(data.shares),
-        avgCost: data.avg_cost ? parseFloat(data.avg_cost) : null,
-      },
-      error: null,
-    };
-  } catch (error) {
-    console.error('Error in addPosition:', error);
-    return { position: null, error };
-  }
-}
-
-/**
- * Update a position
- * @param {string} positionId - Position UUID
- * @param {Object} updates - Fields to update {shares?, avgCost?}
- * @returns {Promise<{position: Object|null, error: Error|null}>}
- */
-export async function updatePosition(positionId, updates) {
-  if (!supabase || !isAuthAvailable()) {
-    return { position: null, error: new Error('Database not available') };
-  }
-
-  try {
-    const updateData = {};
-    if (updates.shares !== undefined) updateData.shares = updates.shares;
-    if (updates.avgCost !== undefined) updateData.avg_cost = updates.avgCost;
-    if (updates.symbol !== undefined) updateData.symbol = updates.symbol;
-
-    const { data, error } = await supabase
-      .from('positions')
-      .update(updateData)
-      .eq('id', positionId)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error updating position:', error);
-      return { position: null, error };
-    }
-
-    return {
-      position: {
-        id: data.id,
-        symbol: data.symbol,
-        shares: parseFloat(data.shares),
-        avgCost: data.avg_cost ? parseFloat(data.avg_cost) : null,
-      },
-      error: null,
-    };
-  } catch (error) {
-    console.error('Error in updatePosition:', error);
-    return { position: null, error };
-  }
-}
-
-/**
- * Delete a position
- * @param {string} positionId - Position UUID
- * @returns {Promise<{success: boolean, error: Error|null}>}
- */
-export async function deletePosition(positionId) {
-  if (!supabase || !isAuthAvailable()) {
-    return { success: false, error: new Error('Database not available') };
-  }
-
-  try {
-    const { error } = await supabase
-      .from('positions')
-      .delete()
-      .eq('id', positionId);
-
-    if (error) {
-      console.error('Error deleting position:', error);
-      return { success: false, error };
-    }
-
-    return { success: true, error: null };
-  } catch (error) {
-    console.error('Error in deletePosition:', error);
-    return { success: false, error };
-  }
-}
-
-// ============================================
-// SETTINGS OPERATIONS
-// ============================================
-
-/**
- * Save portfolio settings (JSON blob)
- * @param {string} portfolioId - Portfolio UUID
- * @param {Object} settings - Settings object
- * @returns {Promise<{success: boolean, error: Error|null}>}
- */
-export async function saveSettings(portfolioId, settings) {
-  if (!supabase || !isAuthAvailable()) {
-    return { success: false, error: new Error('Database not available') };
-  }
-
-  try {
-    const { error } = await supabase
-      .from('portfolio_settings')
-      .upsert({
-        portfolio_id: portfolioId,
-        settings,
-      }, {
-        onConflict: 'portfolio_id',
-      });
-
-    if (error) {
-      console.error('Error saving settings:', error);
-      return { success: false, error };
-    }
-
-    return { success: true, error: null };
-  } catch (error) {
-    console.error('Error in saveSettings:', error);
-    return { success: false, error };
-  }
-}
-
-/**
- * Get portfolio settings
- * @param {string} portfolioId - Portfolio UUID
- * @returns {Promise<{settings: Object|null, error: Error|null}>}
- */
-export async function getSettings(portfolioId) {
-  if (!supabase || !isAuthAvailable()) {
-    return { settings: null, error: null };
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('portfolio_settings')
-      .select('settings')
-      .eq('portfolio_id', portfolioId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
-      console.error('Error fetching settings:', error);
-      return { settings: null, error };
-    }
-
-    return { settings: data?.settings || {}, error: null };
-  } catch (error) {
-    console.error('Error in getSettings:', error);
-    return { settings: null, error };
-  }
-}
-
-// ============================================
-// SYNC HELPERS
-// ============================================
-
-/**
- * Get the revision number for a portfolio (for conflict detection)
- * @param {string} portfolioId - Portfolio UUID
- * @returns {Promise<{revision: number|null, error: Error|null}>}
- */
-export async function getRevision(portfolioId) {
-  if (!supabase || !isAuthAvailable()) {
-    return { revision: null, error: null };
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('portfolios')
-      .select('revision')
-      .eq('id', portfolioId)
-      .single();
-
-    if (error) {
-      return { revision: null, error };
-    }
-
-    return { revision: data?.revision || 0, error: null };
-  } catch (error) {
-    return { revision: null, error };
-  }
-}
-
-/**
- * Check if database is available and user is authenticated
- * @returns {Promise<boolean>}
- */
-export async function isOnline() {
+export async function isSyncAvailable() {
   if (!supabase || !isAuthAvailable()) {
     return false;
   }
-
   try {
     const { data: { user } } = await getUser();
     return !!user;
@@ -441,14 +511,13 @@ export async function isOnline() {
 }
 
 export default {
-  fetchPortfolio,
-  savePortfolio,
-  deletePortfolio,
-  addPosition,
-  updatePosition,
-  deletePosition,
+  fetchAllData,
+  savePositions,
+  saveCorrelation,
+  saveSimulationResults,
+  saveFactorResults,
+  saveOptimizationResults,
   saveSettings,
-  getSettings,
-  getRevision,
-  isOnline,
+  deletePortfolio,
+  isSyncAvailable,
 };

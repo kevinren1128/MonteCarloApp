@@ -5,20 +5,23 @@
  * @description Handles synchronization between local portfolio state and Supabase.
  *
  * Sync Strategy:
- * 1. On login: Fetch portfolio from server, compare revisions
- * 2. Server revision > local: Use server data
- * 3. Local revision > server or local is newer: Push to server
- * 4. On save: Debounced sync to server if online
- * 5. Offline: Keep localStorage, sync when back online
+ * 1. On login: Fetch all data from server and restore state
+ * 2. On position changes: Debounced save to server
+ * 3. After analysis runs: Save results to server
+ * 4. Offline: Keep localStorage, sync when back online
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  fetchPortfolio,
-  savePortfolio,
-  getRevision,
-  isOnline as checkOnline,
+  fetchAllData,
+  savePositions,
+  saveCorrelation,
+  saveSimulationResults,
+  saveFactorResults,
+  saveOptimizationResults,
+  saveSettings,
+  isSyncAvailable,
 } from '../services/portfolioService';
 
 // ============================================
@@ -43,19 +46,21 @@ import {
 
 /**
  * Hook to sync portfolio with Supabase
- * @param {Object} localPortfolio - Current portfolio from app state
- * @param {Function} setPortfolio - Function to update portfolio in app state
  * @param {Object} options - Sync options
  * @param {number} options.debounceMs - Debounce delay for saves (default: 2000)
  * @param {boolean} options.autoSync - Enable automatic syncing (default: true)
  * @returns {{
  *   syncState: SyncState,
- *   syncToServer: Function,
- *   syncFromServer: Function,
- *   forceSync: Function,
+ *   loadFromServer: Function,
+ *   savePositionsToServer: Function,
+ *   saveCorrelationToServer: Function,
+ *   saveSimulationToServer: Function,
+ *   saveFactorsToServer: Function,
+ *   saveOptimizationToServer: Function,
+ *   saveSettingsToServer: Function,
  * }}
  */
-export function usePortfolioSync(localPortfolio, setPortfolio, options = {}) {
+export function usePortfolioSync(options = {}) {
   const { debounceMs = 2000, autoSync = true } = options;
   const { state: authState } = useAuth();
   const { user, isAuthenticated, isAvailable: isAuthAvailable } = authState;
@@ -69,257 +74,289 @@ export function usePortfolioSync(localPortfolio, setPortfolio, options = {}) {
 
   // Refs for debouncing and tracking
   const saveTimeoutRef = useRef(null);
-  const lastLocalRevisionRef = useRef(localPortfolio?.revision || 0);
   const isSyncingRef = useRef(false);
 
   // ============================================
-  // SYNC TO SERVER
+  // LOAD FROM SERVER (on login)
   // ============================================
 
   /**
-   * Push local portfolio to server
+   * Load all user data from server
+   * Call this on login to restore full state
+   * @returns {Promise<{data: Object|null, error: Error|null}>}
    */
-  const syncToServer = useCallback(async (portfolio = localPortfolio) => {
-    if (!isAuthenticated || !isAuthAvailable || isSyncingRef.current) {
+  const loadFromServer = useCallback(async () => {
+    if (!isAuthenticated || !isAuthAvailable) {
+      return { data: null, error: null };
+    }
+
+    isSyncingRef.current = true;
+    setSyncState(prev => ({ ...prev, status: 'syncing', error: null }));
+
+    try {
+      const { data, error } = await fetchAllData();
+
+      if (error) {
+        console.error('[usePortfolioSync] Load error:', error);
+        setSyncState(prev => ({ ...prev, status: 'error', error }));
+        return { data: null, error };
+      }
+
+      setSyncState({
+        status: 'synced',
+        lastSynced: new Date(),
+        error: null,
+        hasUnsyncedChanges: false,
+      });
+
+      console.log('[usePortfolioSync] Loaded data from server:', data ? 'success' : 'no data');
+      return { data, error: null };
+    } catch (error) {
+      console.error('[usePortfolioSync] Load exception:', error);
+      setSyncState(prev => ({ ...prev, status: 'error', error }));
+      return { data: null, error };
+    } finally {
+      isSyncingRef.current = false;
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  // ============================================
+  // SAVE POSITIONS (debounced)
+  // ============================================
+
+  /**
+   * Save positions to server
+   * @param {Array} positions - Array of position objects
+   * @param {number} cashBalance - Cash balance
+   * @param {boolean} immediate - Skip debounce if true
+   */
+  const savePositionsToServer = useCallback(async (positions, cashBalance = 0, immediate = false) => {
+    if (!isAuthenticated || !isAuthAvailable) {
       return { success: false, error: null };
     }
-
-    isSyncingRef.current = true;
-    setSyncState(prev => ({ ...prev, status: 'syncing', error: null }));
-
-    try {
-      // Check if we're online
-      const online = await checkOnline();
-      if (!online) {
-        setSyncState(prev => ({
-          ...prev,
-          status: 'offline',
-          hasUnsyncedChanges: true,
-        }));
-        return { success: false, error: new Error('Offline') };
-      }
-
-      const { portfolio: savedPortfolio, error } = await savePortfolio(portfolio);
-
-      if (error) {
-        setSyncState(prev => ({
-          ...prev,
-          status: 'error',
-          error,
-          hasUnsyncedChanges: true,
-        }));
-        return { success: false, error };
-      }
-
-      // Update local portfolio with server-generated ID and revision
-      if (savedPortfolio && setPortfolio) {
-        setPortfolio(prev => ({
-          ...prev,
-          id: savedPortfolio.id,
-          revision: savedPortfolio.revision,
-        }));
-      }
-
-      setSyncState({
-        status: 'synced',
-        lastSynced: new Date(),
-        error: null,
-        hasUnsyncedChanges: false,
-      });
-
-      return { success: true, error: null };
-    } catch (error) {
-      console.error('Sync to server failed:', error);
-      setSyncState(prev => ({
-        ...prev,
-        status: 'error',
-        error,
-        hasUnsyncedChanges: true,
-      }));
-      return { success: false, error };
-    } finally {
-      isSyncingRef.current = false;
-    }
-  }, [localPortfolio, isAuthenticated, isAuthAvailable, setPortfolio]);
-
-  // ============================================
-  // SYNC FROM SERVER
-  // ============================================
-
-  /**
-   * Pull portfolio from server
-   */
-  const syncFromServer = useCallback(async () => {
-    if (!isAuthenticated || !isAuthAvailable || isSyncingRef.current) {
-      return { success: false, portfolio: null, error: null };
-    }
-
-    isSyncingRef.current = true;
-    setSyncState(prev => ({ ...prev, status: 'syncing', error: null }));
-
-    try {
-      const online = await checkOnline();
-      if (!online) {
-        setSyncState(prev => ({ ...prev, status: 'offline' }));
-        return { success: false, portfolio: null, error: new Error('Offline') };
-      }
-
-      const { portfolio, error } = await fetchPortfolio();
-
-      if (error) {
-        setSyncState(prev => ({ ...prev, status: 'error', error }));
-        return { success: false, portfolio: null, error };
-      }
-
-      if (portfolio) {
-        // Update local state with server data
-        if (setPortfolio) {
-          setPortfolio(portfolio);
-        }
-        lastLocalRevisionRef.current = portfolio.revision;
-      }
-
-      setSyncState({
-        status: 'synced',
-        lastSynced: new Date(),
-        error: null,
-        hasUnsyncedChanges: false,
-      });
-
-      return { success: true, portfolio, error: null };
-    } catch (error) {
-      console.error('Sync from server failed:', error);
-      setSyncState(prev => ({ ...prev, status: 'error', error }));
-      return { success: false, portfolio: null, error };
-    } finally {
-      isSyncingRef.current = false;
-    }
-  }, [isAuthenticated, isAuthAvailable, setPortfolio]);
-
-  // ============================================
-  // FORCE SYNC (with conflict resolution)
-  // ============================================
-
-  /**
-   * Force sync with conflict resolution
-   * Compares revisions and decides which version to keep
-   */
-  const forceSync = useCallback(async () => {
-    if (!isAuthenticated || !isAuthAvailable) {
-      return { success: false, action: 'none', error: null };
-    }
-
-    try {
-      // Fetch server portfolio
-      const { portfolio: serverPortfolio, error: fetchError } = await fetchPortfolio();
-
-      if (fetchError) {
-        return { success: false, action: 'none', error: fetchError };
-      }
-
-      // If no server portfolio, push local
-      if (!serverPortfolio) {
-        if (localPortfolio && (localPortfolio.positions?.length > 0 || localPortfolio.cash > 0)) {
-          const { success, error } = await syncToServer(localPortfolio);
-          return { success, action: 'pushed', error };
-        }
-        return { success: true, action: 'none', error: null };
-      }
-
-      // Compare revisions
-      const serverRevision = serverPortfolio.revision || 0;
-      const localRevision = localPortfolio?.revision || 0;
-
-      if (serverRevision > localRevision) {
-        // Server wins - use server data
-        if (setPortfolio) {
-          setPortfolio(serverPortfolio);
-        }
-        lastLocalRevisionRef.current = serverRevision;
-        setSyncState({
-          status: 'synced',
-          lastSynced: new Date(),
-          error: null,
-          hasUnsyncedChanges: false,
-        });
-        return { success: true, action: 'pulled', error: null };
-      } else if (localRevision > serverRevision || hasLocalChanges(localPortfolio, serverPortfolio)) {
-        // Local wins - push to server
-        const { success, error } = await syncToServer(localPortfolio);
-        return { success, action: 'pushed', error };
-      }
-
-      // Already in sync
-      setSyncState(prev => ({
-        ...prev,
-        status: 'synced',
-        lastSynced: new Date(),
-        hasUnsyncedChanges: false,
-      }));
-      return { success: true, action: 'none', error: null };
-    } catch (error) {
-      console.error('Force sync failed:', error);
-      return { success: false, action: 'none', error };
-    }
-  }, [isAuthenticated, isAuthAvailable, localPortfolio, setPortfolio, syncToServer]);
-
-  // ============================================
-  // AUTO-SYNC ON LOGIN
-  // ============================================
-
-  useEffect(() => {
-    if (!autoSync || !isAuthenticated || !isAuthAvailable) {
-      return;
-    }
-
-    // Sync on login
-    forceSync();
-  }, [isAuthenticated, isAuthAvailable, autoSync]); // Note: forceSync excluded to avoid loop
-
-  // ============================================
-  // DEBOUNCED AUTO-SAVE
-  // ============================================
-
-  useEffect(() => {
-    if (!autoSync || !isAuthenticated || !isAuthAvailable || !localPortfolio) {
-      return;
-    }
-
-    // Detect changes by comparing to last known revision
-    const currentRevision = localPortfolio.revision || 0;
-    if (currentRevision === lastLocalRevisionRef.current) {
-      return;
-    }
-
-    // Mark as having unsynced changes
-    setSyncState(prev => ({ ...prev, hasUnsyncedChanges: true }));
 
     // Clear existing timeout
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
-    // Debounced save
-    saveTimeoutRef.current = setTimeout(() => {
-      syncToServer(localPortfolio);
-      lastLocalRevisionRef.current = currentRevision;
-    }, debounceMs);
+    const doSave = async () => {
+      if (isSyncingRef.current) return { success: false, error: null };
 
+      isSyncingRef.current = true;
+      setSyncState(prev => ({ ...prev, status: 'syncing' }));
+
+      try {
+        const { success, error } = await savePositions(positions, cashBalance);
+
+        if (error) {
+          setSyncState(prev => ({ ...prev, status: 'error', error, hasUnsyncedChanges: true }));
+          return { success: false, error };
+        }
+
+        setSyncState({
+          status: 'synced',
+          lastSynced: new Date(),
+          error: null,
+          hasUnsyncedChanges: false,
+        });
+
+        return { success: true, error: null };
+      } catch (error) {
+        console.error('[usePortfolioSync] Save positions error:', error);
+        setSyncState(prev => ({ ...prev, status: 'error', error, hasUnsyncedChanges: true }));
+        return { success: false, error };
+      } finally {
+        isSyncingRef.current = false;
+      }
+    };
+
+    if (immediate) {
+      return doSave();
+    }
+
+    // Mark as having unsynced changes
+    setSyncState(prev => ({ ...prev, hasUnsyncedChanges: true }));
+
+    // Debounced save
+    return new Promise((resolve) => {
+      saveTimeoutRef.current = setTimeout(async () => {
+        const result = await doSave();
+        resolve(result);
+      }, debounceMs);
+    });
+  }, [isAuthenticated, isAuthAvailable, debounceMs]);
+
+  // ============================================
+  // SAVE CORRELATION MATRIX
+  // ============================================
+
+  const saveCorrelationToServer = useCallback(async (correlationMatrix, method, tickers) => {
+    if (!isAuthenticated || !isAuthAvailable || !correlationMatrix) {
+      return { success: false, error: null };
+    }
+
+    setSyncState(prev => ({ ...prev, status: 'syncing' }));
+
+    try {
+      const { success, error } = await saveCorrelation(correlationMatrix, method, tickers);
+
+      if (error) {
+        setSyncState(prev => ({ ...prev, status: 'error', error }));
+        return { success: false, error };
+      }
+
+      setSyncState(prev => ({
+        ...prev,
+        status: 'synced',
+        lastSynced: new Date(),
+      }));
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[usePortfolioSync] Save correlation error:', error);
+      setSyncState(prev => ({ ...prev, status: 'error', error }));
+      return { success: false, error };
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  // ============================================
+  // SAVE SIMULATION RESULTS
+  // ============================================
+
+  const saveSimulationToServer = useCallback(async (results) => {
+    if (!isAuthenticated || !isAuthAvailable || !results) {
+      return { success: false, error: null };
+    }
+
+    setSyncState(prev => ({ ...prev, status: 'syncing' }));
+
+    try {
+      const { success, error } = await saveSimulationResults(results);
+
+      if (error) {
+        setSyncState(prev => ({ ...prev, status: 'error', error }));
+        return { success: false, error };
+      }
+
+      setSyncState(prev => ({
+        ...prev,
+        status: 'synced',
+        lastSynced: new Date(),
+      }));
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[usePortfolioSync] Save simulation error:', error);
+      setSyncState(prev => ({ ...prev, status: 'error', error }));
+      return { success: false, error };
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  // ============================================
+  // SAVE FACTOR RESULTS
+  // ============================================
+
+  const saveFactorsToServer = useCallback(async (results) => {
+    if (!isAuthenticated || !isAuthAvailable || !results) {
+      return { success: false, error: null };
+    }
+
+    setSyncState(prev => ({ ...prev, status: 'syncing' }));
+
+    try {
+      const { success, error } = await saveFactorResults(results);
+
+      if (error) {
+        setSyncState(prev => ({ ...prev, status: 'error', error }));
+        return { success: false, error };
+      }
+
+      setSyncState(prev => ({
+        ...prev,
+        status: 'synced',
+        lastSynced: new Date(),
+      }));
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[usePortfolioSync] Save factors error:', error);
+      setSyncState(prev => ({ ...prev, status: 'error', error }));
+      return { success: false, error };
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  // ============================================
+  // SAVE OPTIMIZATION RESULTS
+  // ============================================
+
+  const saveOptimizationToServer = useCallback(async (results) => {
+    if (!isAuthenticated || !isAuthAvailable || !results) {
+      return { success: false, error: null };
+    }
+
+    setSyncState(prev => ({ ...prev, status: 'syncing' }));
+
+    try {
+      const { success, error } = await saveOptimizationResults(results);
+
+      if (error) {
+        setSyncState(prev => ({ ...prev, status: 'error', error }));
+        return { success: false, error };
+      }
+
+      setSyncState(prev => ({
+        ...prev,
+        status: 'synced',
+        lastSynced: new Date(),
+      }));
+
+      return { success: true, error: null };
+    } catch (error) {
+      console.error('[usePortfolioSync] Save optimization error:', error);
+      setSyncState(prev => ({ ...prev, status: 'error', error }));
+      return { success: false, error };
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  // ============================================
+  // SAVE SETTINGS
+  // ============================================
+
+  const saveSettingsToServer = useCallback(async (settings) => {
+    if (!isAuthenticated || !isAuthAvailable || !settings) {
+      return { success: false, error: null };
+    }
+
+    try {
+      const { success, error } = await saveSettings(settings);
+      return { success, error };
+    } catch (error) {
+      console.error('[usePortfolioSync] Save settings error:', error);
+      return { success: false, error };
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  // ============================================
+  // CLEANUP
+  // ============================================
+
+  useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [localPortfolio, isAuthenticated, isAuthAvailable, autoSync, debounceMs, syncToServer]);
+  }, []);
 
   // ============================================
   // ONLINE/OFFLINE DETECTION
   // ============================================
 
   useEffect(() => {
-    const handleOnline = async () => {
-      if (syncState.hasUnsyncedChanges && localPortfolio) {
-        await syncToServer(localPortfolio);
+    const handleOnline = () => {
+      if (syncState.status === 'offline') {
+        setSyncState(prev => ({ ...prev, status: 'idle' }));
       }
     };
 
@@ -334,45 +371,18 @@ export function usePortfolioSync(localPortfolio, setPortfolio, options = {}) {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [syncState.hasUnsyncedChanges, localPortfolio, syncToServer]);
+  }, [syncState.status]);
 
   return {
     syncState,
-    syncToServer,
-    syncFromServer,
-    forceSync,
+    loadFromServer,
+    savePositionsToServer,
+    saveCorrelationToServer,
+    saveSimulationToServer,
+    saveFactorsToServer,
+    saveOptimizationToServer,
+    saveSettingsToServer,
   };
-}
-
-// ============================================
-// HELPERS
-// ============================================
-
-/**
- * Compare two portfolios to detect meaningful changes
- */
-function hasLocalChanges(local, server) {
-  if (!local || !server) return false;
-
-  // Compare cash balance
-  if (local.cash !== server.cash) return true;
-
-  // Compare positions count
-  const localPositions = local.positions || [];
-  const serverPositions = server.positions || [];
-
-  if (localPositions.length !== serverPositions.length) return true;
-
-  // Compare each position
-  const serverMap = new Map(serverPositions.map(p => [p.symbol, p]));
-  for (const localPos of localPositions) {
-    const serverPos = serverMap.get(localPos.symbol);
-    if (!serverPos) return true;
-    if (localPos.shares !== serverPos.shares) return true;
-    if (localPos.avgCost !== serverPos.avgCost) return true;
-  }
-
-  return false;
 }
 
 export default usePortfolioSync;
