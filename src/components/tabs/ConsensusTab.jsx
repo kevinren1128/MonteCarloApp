@@ -473,6 +473,8 @@ const ConsensusTab = memo(({ positions, styles }) => {
           label: `FY${String(h.year).slice(-2)}`,
           isEstimate: false,
           revenue: h.revenue,
+          grossProfit: h.grossProfit,
+          grossMargin: h.grossMargin,
           ebitda: h.ebitda,
           ebitdaMargin: calcMargin(h.ebitda, h.revenue),
           operatingIncome: h.operatingIncome,
@@ -480,7 +482,6 @@ const ConsensusTab = memo(({ positions, styles }) => {
           netIncome: h.netIncome,
           netMargin: h.netMargin ?? calcMargin(h.netIncome, h.revenue),
           eps: h.eps,
-          grossMargin: h.grossMargin,
           capitalExpenditure: cfData.capitalExpenditure,
           capexRatio: calcMargin(Math.abs(cfData.capitalExpenditure || 0), h.revenue),
           freeCashFlow: cfData.freeCashFlow,
@@ -504,6 +505,8 @@ const ConsensusTab = memo(({ positions, styles }) => {
           label: `FY${String(f.fiscalYear).slice(-2)}E`,
           isEstimate: true,
           revenue: revenue,
+          grossProfit: f.grossProfit,
+          grossMargin: f.grossMargin,
           ebitda: ebitda,
           ebitdaMargin: calcMargin(ebitda, revenue),
           operatingIncome: ebit,
@@ -511,7 +514,6 @@ const ConsensusTab = memo(({ positions, styles }) => {
           netIncome: netIncome,
           netMargin: calcMargin(netIncome, revenue),
           eps: f.eps,
-          grossMargin: f.grossMargin,
           // CapEx and FCF not available in forward estimates
           capitalExpenditure: null,
           capexRatio: null,
@@ -834,6 +836,21 @@ const ConsensusTab = memo(({ positions, styles }) => {
                       </td>
                     );
                   })}
+                </tr>
+
+                {/* Gross Profit with margin */}
+                <tr>
+                  <td style={headerCellStyle}>Gross Profit</td>
+                  {timeSeries.map((s, i) => (
+                    <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      <div>{s.grossProfit ? formatNumber(s.grossProfit) : '—'}</div>
+                      {s.grossMargin != null && (
+                        <div style={{ fontSize: '8px', fontWeight: '500', fontStyle: 'italic', color: getMarginColor(s.grossMargin, { good: 0.5, ok: 0.3 }), marginTop: '2px' }}>
+                          {(s.grossMargin * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </td>
+                  ))}
                 </tr>
 
                 {/* EBITDA with margin */}
