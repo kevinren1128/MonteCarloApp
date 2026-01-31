@@ -1659,8 +1659,8 @@ function MonteCarloSimulator() {
         return;
       }
       
-      // Number keys 1-7 for tab switching
-      if (e.key >= '1' && e.key <= '7' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      // Number keys 1-8 for tab switching
+      if (e.key >= '1' && e.key <= '8' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const tabs = ['positions', 'consensus', 'distributions', 'correlation', 'simulation', 'factors', 'optimize', 'export'];
         const idx = parseInt(e.key) - 1;
         if (tabs[idx]) {
