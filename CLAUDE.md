@@ -71,3 +71,5 @@ Read `docs/ARCHITECTURE.md` first for comprehensive system documentation, algori
 
 - After completing any code changes, automatically commit with a descriptive message
 - Push to GitHub after commits
+- Use claude-mem:make-plan for multi-step implementation tasks
+- Use claude-mem:do to execute implementation plans
