@@ -5929,8 +5929,8 @@ function MonteCarloSimulator() {
       const paths = pathsPerSwap;
       const constantCashReturn = effectiveCashWeight * (cashRate || 0);
       
-      // Cholesky decomposition
-      const L = choleskyDecomposition(editedCorrelation);
+      // Cholesky decomposition - use correlationToUse (passed param or state)
+      const L = choleskyDecomposition(correlationToUse);
       const flatL = new Float64Array(n * n);
       for (let i = 0; i < n; i++) {
         for (let j = 0; j <= i; j++) {
