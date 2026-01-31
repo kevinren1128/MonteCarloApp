@@ -20,6 +20,7 @@
  *   GET /api/profile?symbols=AAPL                        - Company profiles (Yahoo)
  *   GET /api/consensus?symbols=AAPL                      - Analyst estimates (FMP)
  *   GET /api/fx?pairs=EURUSD,GBPUSD                      - Exchange rates (Yahoo)
+ *   GET /api/correlation?symbols=AAPL,MSFT,GOOG&range=5y - Correlation matrix (6h cache)
  *   GET ?url=...                                         - Legacy proxy mode
  *
  * USD Conversion (currency=USD):
@@ -43,6 +44,7 @@ const CACHE_TTLS = {
   volatility: 6 * 60 * 60,  // 6 hours
   distribution: 12 * 60 * 60, // 12 hours (expensive to compute, stable)
   calendarReturns: 24 * 60 * 60, // 24 hours (only changes end of day)
+  correlation: 6 * 60 * 60, // 6 hours (depends on price data)
 };
 
 // ============================================
@@ -132,6 +134,9 @@ export default {
       } else if (path.startsWith('/api/calendar-returns')) {
         handler = 'calendar-returns';
         response = await handleCalendarReturns(url, env, requestId);
+      } else if (path.startsWith('/api/correlation')) {
+        handler = 'correlation';
+        response = await handleCorrelation(url, env, requestId);
       } else if (url.searchParams.has('url')) {
         handler = 'legacy';
         response = await handleLegacyProxy(url, env, requestId);
@@ -139,10 +144,11 @@ export default {
         handler = 'health';
         response = jsonResponse({
           status: 'ok',
-          version: '2.2.0',
+          version: '2.3.0',
           endpoints: [
             '/api/prices', '/api/quotes', '/api/profile', '/api/consensus', '/api/fx',
-            '/api/beta', '/api/volatility', '/api/distribution', '/api/calendar-returns'
+            '/api/beta', '/api/volatility', '/api/distribution', '/api/calendar-returns',
+            '/api/correlation'
           ],
           kvBound: !!env.CACHE,
         });
@@ -1287,6 +1293,128 @@ async function handleCalendarReturns(url, env, requestId) {
   return jsonResponse(results);
 }
 
+/**
+ * Correlation matrix
+ * GET /api/correlation?symbols=AAPL,MSFT,GOOG&range=5y&interval=1d
+ *
+ * Returns NxN correlation matrix for the given symbols.
+ * Symbols are normalized (uppercase, sorted, unique) for consistent caching.
+ */
+async function handleCorrelation(url, env, requestId) {
+  const rawSymbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const range = url.searchParams.get('range') || '5y';
+  const interval = url.searchParams.get('interval') || '1d';
+
+  if (rawSymbols.length < 2) {
+    return jsonResponse({ error: 'At least 2 symbols required for correlation matrix' }, 400);
+  }
+
+  // Normalize symbols: uppercase, unique, sorted for consistent cache keys
+  const symbols = [...new Set(rawSymbols.map(s => s.toUpperCase()))].sort();
+
+  log.info('Computing correlation matrix', { requestId, symbols, range, interval });
+
+  // Cache key uses sorted symbols joined by pipe
+  const cacheKey = `corr:v1:${range}:${interval}:${symbols.join('|')}`;
+
+  // Check cache first
+  const cached = await getCached(env, cacheKey, requestId);
+  if (cached) {
+    log.info('Correlation matrix from cache', { requestId, symbolCount: symbols.length });
+    return jsonResponse({
+      ...cached,
+      cached: true,
+      source: 'kv'
+    });
+  }
+
+  // Fetch price data for all symbols
+  const priceDataMap = {};
+  const fetchPromises = symbols.map(async (symbol) => {
+    const priceKey = `prices:v1:${symbol}:${range}:${interval}`;
+    let priceData = await getCached(env, priceKey, requestId);
+    if (!priceData) {
+      priceData = await fetchYahooChart(symbol, range, interval, requestId);
+      if (priceData) {
+        await setCache(env, priceKey, priceData, CACHE_TTLS.prices, requestId);
+      }
+    }
+    priceDataMap[symbol] = priceData;
+  });
+
+  await Promise.all(fetchPromises);
+
+  // Compute daily returns for each symbol
+  const returnsMap = {};
+  let minLength = Infinity;
+
+  for (const symbol of symbols) {
+    const priceData = priceDataMap[symbol];
+    if (!priceData?.prices?.length || priceData.prices.length < 30) {
+      return jsonResponse({
+        error: `Insufficient price data for ${symbol}`,
+        symbol,
+        minRequired: 30,
+        actual: priceData?.prices?.length || 0
+      }, 400);
+    }
+    const returns = computeDailyReturns(priceData.prices);
+    returnsMap[symbol] = returns;
+    minLength = Math.min(minLength, returns.length);
+  }
+
+  // Align all return series to same length (use most recent data)
+  for (const symbol of symbols) {
+    returnsMap[symbol] = returnsMap[symbol].slice(-minLength);
+  }
+
+  // Compute NxN correlation matrix
+  const n = symbols.length;
+  const matrix = [];
+
+  for (let i = 0; i < n; i++) {
+    const row = [];
+    for (let j = 0; j < n; j++) {
+      if (i === j) {
+        row.push(1.0);
+      } else if (j < i) {
+        // Lower triangle - copy from upper triangle
+        row.push(matrix[j][i]);
+      } else {
+        // Upper triangle - compute correlation
+        const corr = computePearsonCorrelation(returnsMap[symbols[i]], returnsMap[symbols[j]]);
+        row.push(Math.round(corr * 1000) / 1000); // Round to 3 decimal places
+      }
+    }
+    matrix.push(row);
+  }
+
+  const result = {
+    symbols,
+    matrix,
+    range,
+    interval,
+    pointsUsed: minLength,
+    asOf: new Date().toISOString().split('T')[0],
+  };
+
+  // Cache the result
+  await setCache(env, cacheKey, result, CACHE_TTLS.correlation, requestId);
+
+  log.info('Correlation matrix computed', {
+    requestId,
+    symbolCount: symbols.length,
+    matrixSize: `${n}x${n}`,
+    pointsUsed: minLength
+  });
+
+  return jsonResponse({
+    ...result,
+    cached: false,
+    source: 'computed'
+  });
+}
+
 // ============================================
 // COMPUTATION HELPERS
 // ============================================
@@ -1317,6 +1445,36 @@ function computeLogReturns(prices) {
     }
   }
   return returns;
+}
+
+/**
+ * Compute Pearson correlation between two return series
+ * Assumes series are already aligned to same length
+ */
+function computePearsonCorrelation(x, y) {
+  const n = x.length;
+  if (n < 30 || n !== y.length) return 0;
+
+  // Compute means
+  const meanX = x.reduce((a, v) => a + v, 0) / n;
+  const meanY = y.reduce((a, v) => a + v, 0) / n;
+
+  // Compute covariance and standard deviations
+  let cov = 0, varX = 0, varY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = x[i] - meanX;
+    const dy = y[i] - meanY;
+    cov += dx * dy;
+    varX += dx * dx;
+    varY += dy * dy;
+  }
+
+  const stdX = Math.sqrt(varX / n);
+  const stdY = Math.sqrt(varY / n);
+
+  if (stdX === 0 || stdY === 0) return 0;
+
+  return (cov / n) / (stdX * stdY);
 }
 
 /**

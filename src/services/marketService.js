@@ -438,6 +438,39 @@ export async function fetchCalendarReturns(symbols, range = '10y') {
 }
 
 /**
+ * Fetch pre-computed correlation matrix from Worker
+ *
+ * @param {string[]} symbols - Array of ticker symbols (will be normalized: uppercase, sorted, unique)
+ * @param {string} range - Time range (default: 5y)
+ * @param {string} interval - Data interval (default: 1d)
+ * @returns {Promise<Object|null>} { symbols: string[], matrix: number[][], ... } or null if failed
+ */
+export async function fetchCorrelationMatrix(symbols, range = '5y', interval = '1d') {
+  if (!isWorkerConfigured) {
+    console.log('[MarketService] Worker not configured, skipping correlation fetch');
+    return null;
+  }
+
+  if (symbols.length < 2) {
+    console.log('[MarketService] Need at least 2 symbols for correlation matrix');
+    return null;
+  }
+
+  const data = await fetchFromWorker('/api/correlation', {
+    symbols: symbols.join(','),
+    range,
+    interval,
+  });
+
+  if (data?.matrix) {
+    console.log(`[MarketService] Fetched ${data.symbols.length}x${data.symbols.length} correlation matrix from Worker`);
+    return data;
+  }
+
+  return null;
+}
+
+/**
  * Fetch all derived metrics in parallel
  * Returns null for any that fail, allowing local fallback
  *
@@ -483,5 +516,6 @@ export default {
   fetchVolatility,
   fetchDistributions,
   fetchCalendarReturns,
+  fetchCorrelationMatrix,
   fetchAllDerivedMetrics,
 };
