@@ -6871,6 +6871,7 @@ function MonteCarloSimulator() {
             useEwma={useEwma}
             gldAsCash={gldAsCash}
             fatTailMethod={fatTailMethod}
+            useQmc={useQmc}
             editedCorrelation={editedCorrelation}
             simulationResults={simulationResults}
             getDistributionParams={getDistributionParams}
@@ -6882,6 +6883,7 @@ function MonteCarloSimulator() {
             positionMetadata={positionMetadata}
             positionBetas={positionBetas}
             contributionChartMemo={contributionChartMemo}
+            analyticalSwapMatrix={analyticalSwapMatrix}
           />
         )}
       </div>
