@@ -2022,12 +2022,22 @@ function MonteCarloSimulator() {
       // Check in-memory cache first
       if (!forceRefresh && cached?.fetchedAt && Date.now() - cached.fetchedAt < UNIFIED_CACHE_MAX_AGE) {
         cachedTickers.push(ticker);
+        // Map cached data to historyResults format, including FX metadata
+        // cached.currency is the LOCAL currency, cached.closePrices are in LOCAL currency
+        // cached.exchangeRate is the FX rate used for USD conversion
+        const isNonUSD = cached.currency && cached.currency !== 'USD';
         historyResults[ticker] = {
           ticker,
           data: cached.closePrices,
           currency: cached.currency || 'USD',
           regularMarketPrice: cached.currentPrice,
-          cached: true
+          cached: true,
+          // Include FX metadata so quickPriceUpdates uses the correct path
+          ...(isNonUSD && {
+            localCurrency: cached.currency,
+            localPrices: cached.closePrices,
+            fxRate: cached.exchangeRate || 1,
+          }),
         };
       }
       // For position tickers, check persistent cache if not in memory
@@ -2037,15 +2047,23 @@ function MonteCarloSimulator() {
           cachedTickers.push(ticker);
           // Try to get currency from existing unified data if available
           const existingData = newData[ticker];
+          const currency = existingData?.currency || 'USD';
+          const isNonUSD = currency !== 'USD';
           historyResults[ticker] = {
             ticker,
             data: cachedPrices,
-            currency: existingData?.currency || 'USD',
+            currency,
             regularMarketPrice: existingData?.currentPrice,
             cached: true,
-            fromPersistentCache: true
+            fromPersistentCache: true,
+            // Include FX metadata for non-USD tickers
+            ...(isNonUSD && {
+              localCurrency: currency,
+              localPrices: cachedPrices,
+              fxRate: existingData?.exchangeRate || 1,
+            }),
           };
-          console.log(`💾 Using persistent cache for ${ticker} (${cachedPrices.length} days, ${existingData?.currency || 'USD'})`);
+          console.log(`💾 Using persistent cache for ${ticker} (${cachedPrices.length} days, ${currency}${isNonUSD ? ` @${existingData?.exchangeRate}` : ''})`);
         } else {
           needsFetch.push(ticker);
         }
@@ -6216,10 +6234,9 @@ function MonteCarloSimulator() {
       setFullLoadProgress({ step: 1, total: steps.length, phase: steps[0].name, detail: 'Fetching prices and returns...' });
       console.log(`\n${'='.repeat(50)}\n🚀 FULL LOAD: Step 1/${steps.length} - ${steps[0].name}\n${'='.repeat(50)}`);
 
-      // Use forceRefresh=true to ensure fresh data from Worker with proper FX conversion
-      // This guarantees international tickers get correct localCurrency/localPrices/fxRate metadata
-      // Same behavior as "Refresh Prices" which works correctly
-      const loadedMarketData = await fetchUnifiedMarketData(true);
+      // Use smart caching: cache now properly includes FX metadata (localCurrency, fxRate)
+      // for international tickers, so forceRefresh=false can be used safely
+      const loadedMarketData = await fetchUnifiedMarketData(false);
 
       // Verify data was loaded
       const loadedTickers = Object.keys(loadedMarketData || {});
