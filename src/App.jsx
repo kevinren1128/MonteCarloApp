@@ -2346,9 +2346,13 @@ function MonteCarloSimulator() {
       
       const history = histResult?.data;
       const profile = profiles[ticker] || newData[ticker] || {};
-      const currency = histResult?.currency || 'USD';
-      const exchangeRate = exchangeRates[currency] || 1;
-      
+
+      // Worker returns prices already in USD with localCurrency/localPrices/fxRate metadata
+      // Use the local currency info for proper display, fall back to old behavior if not available
+      const hasWorkerFxData = histResult?.localCurrency && histResult?.fxRate;
+      const currency = hasWorkerFxData ? histResult.localCurrency : (histResult?.currency || 'USD');
+      const exchangeRate = hasWorkerFxData ? histResult.fxRate : (exchangeRates[currency] || 1);
+
       if (history && history.length > 10) {
         // Log date range for this ticker
         const startDate = history[0]?.date?.toLocaleDateString() || 'N/A';
@@ -2357,7 +2361,19 @@ function MonteCarloSimulator() {
         const currencyNote = currency !== 'USD' ? ` [${currency}→USD @${exchangeRate.toFixed(4)}]` : '';
         console.log(`   ${ticker}: ${history.length} days (~${years}yr) from ${startDate} to ${endDate}${currencyNote}`);
 
-        const processed = processTickerData(ticker, history, profile, spyData, currency, exchangeRate);
+        // If Worker converted to USD, we need to pass local prices for domesticPrice calculation
+        // processTickerData expects history in local currency, so if Worker converted, use localPrices
+        let historyForProcessing = history;
+        if (hasWorkerFxData && histResult.localPrices?.length > 0) {
+          // Create history array with local currency prices for processTickerData
+          // This ensures domesticPrice is set correctly to the local currency value
+          historyForProcessing = history.map((h, i) => ({
+            ...h,
+            close: histResult.localPrices[i] ?? h.close
+          }));
+        }
+
+        const processed = processTickerData(ticker, historyForProcessing, profile, spyData, currency, exchangeRate);
 
         // Override with Worker-computed metrics if available (faster, pre-cached)
         const workerBeta = workerDerivedMetrics.betas?.[ticker];
