@@ -38,6 +38,7 @@ const Sidebar = memo(({
   onReset,
   isLoading,
   loadProgress,
+  marketDataProgress,
   // Status indicators for tabs
   tabStatus = {},
 }) => {
@@ -447,24 +448,84 @@ const Sidebar = memo(({
               borderRadius: '2px',
               overflow: 'hidden',
             }}>
-              <div
-                style={{
-                  height: '100%',
-                  width: `${(loadProgress.step / loadProgress.total) * 100}%`,
-                  background: 'linear-gradient(90deg, #00d4ff, #7b2ff7)',
-                  borderRadius: '2px',
-                  transition: 'width 0.3s ease',
-                }}
-              />
+              {(() => {
+                // Calculate progress: use market data progress for step 1, otherwise use step progress
+                let progress = 0;
+                if (loadProgress.total > 0) {
+                  if (loadProgress.step === 1 && marketDataProgress?.total > 0) {
+                    // During market data loading (step 1), show granular progress
+                    const stepProgress = (marketDataProgress.current / marketDataProgress.total);
+                    progress = (stepProgress / loadProgress.total) * 100;
+                  } else {
+                    progress = (loadProgress.step / loadProgress.total) * 100;
+                  }
+                }
+                return (
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${progress}%`,
+                      background: 'linear-gradient(90deg, #00d4ff, #7b2ff7)',
+                      borderRadius: '2px',
+                      transition: 'width 0.3s ease',
+                    }}
+                  />
+                );
+              })()}
             </div>
             {/* Progress text - only when expanded */}
             {isExpanded && (
               <div style={{
-                fontSize: '9px',
-                color: '#00d4ff',
-                textAlign: 'center',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px',
+                alignItems: 'center',
               }}>
-                {loadProgress.step}/{loadProgress.total} - {loadProgress.phase}
+                <div style={{
+                  fontSize: '9px',
+                  color: '#00d4ff',
+                  textAlign: 'center',
+                }}>
+                  {loadProgress.step}/{loadProgress.total} - {loadProgress.phase}
+                </div>
+                {/* Show market data progress during step 1 or standalone market data loading */}
+                {marketDataProgress?.total > 0 && (
+                  <div style={{
+                    fontSize: '8px',
+                    color: '#7b2ff7',
+                    textAlign: 'center',
+                  }}>
+                    {marketDataProgress.current}/{marketDataProgress.total} tickers loaded
+                  </div>
+                )}
+                {/* Show loading ticker name */}
+                {marketDataProgress?.message && marketDataProgress.current < marketDataProgress.total && (
+                  <div style={{
+                    fontSize: '8px',
+                    color: '#666',
+                    textAlign: 'center',
+                    maxWidth: '180px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    Loading {marketDataProgress.message}...
+                  </div>
+                )}
+                {/* Show other phase details */}
+                {loadProgress.detail && (!marketDataProgress?.total || marketDataProgress.total === 0) && (
+                  <div style={{
+                    fontSize: '8px',
+                    color: '#888',
+                    textAlign: 'center',
+                    maxWidth: '180px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {loadProgress.detail}
+                  </div>
+                )}
               </div>
             )}
           </div>
