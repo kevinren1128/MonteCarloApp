@@ -3446,7 +3446,13 @@ function MonteCarloSimulator() {
   
   // Remove position
   const removePosition = (id) => {
-    setPositions(prev => prev.filter(p => p.id !== id));
+    console.log('[removePosition] Removing position with id:', id);
+    setPositions(prev => {
+      console.log('[removePosition] Previous positions:', prev.map(p => ({ id: p.id, ticker: p.ticker })));
+      const filtered = prev.filter(p => p.id !== id);
+      console.log('[removePosition] After filter:', filtered.map(p => ({ id: p.id, ticker: p.ticker })));
+      return filtered;
+    });
   };
   
   // Update position with percentile constraints

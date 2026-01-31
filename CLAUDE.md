@@ -126,11 +126,21 @@ GET /api/fx?pairs=EURUSD,GBPUSD              → Exchange rates (24h cache)
 
 **Derived Metrics (pre-computed, shared cache):**
 ```
+GET /api/metrics?symbols=AAPL,MSFT&benchmark=SPY    → Unified metrics for Positions tab (24h cache)
 GET /api/beta?symbols=AAPL&benchmark=SPY&range=1y   → Beta vs benchmark (6h cache)
 GET /api/volatility?symbols=AAPL&range=1y           → Annualized vol + returns (6h cache)
 GET /api/distribution?symbols=AAPL&range=5y&bootstrap=1000  → P5/P25/P50/P75/P95 (12h cache)
 GET /api/calendar-returns?symbols=AAPL&range=10y    → Calendar year returns (24h cache)
 ```
+
+**Unified Metrics (`/api/metrics`):**
+This is the primary endpoint for fast Positions tab loading. Returns pre-computed:
+- Beta (with lag testing for international stocks)
+- Volatility (annualized %)
+- YTD/1Y/30D returns
+- 30-day sparkline
+- Latest price
+- Currency info (for international stocks)
 
 ### Cache TTLs (KV Namespace: MONTE_CARLO_CACHE)
 | Data Type | TTL | Key Pattern |
@@ -139,10 +149,18 @@ GET /api/calendar-returns?symbols=AAPL&range=10y    → Calendar year returns (2
 | Quotes | 15 minutes | `quotes:v1:{symbol}` |
 | Company profile | 7 days | `profile:v1:{symbol}` |
 | FX rates | 24 hours | `fx:v1:{base}:{quote}` |
+| **Unified metrics** | **24 hours** | `metrics:v1:{symbol}` |
 | Beta | 6 hours | `beta:v1:{symbol}:{benchmark}:{range}:{interval}` |
 | Volatility | 6 hours | `vol:v1:{symbol}:{range}:{interval}` |
 | Distribution | 12 hours | `dist:v1:{symbol}:{range}:{interval}:b{count}` |
 | Calendar returns | 24 hours | `calret:v1:{symbol}:{range}:{interval}` |
+
+### KV Rate Limits (Free Tier)
+Cloudflare KV free tier has daily limits:
+- **100,000 reads/day** - Rarely an issue
+- **1,000 writes/day** - Can be exhausted during heavy development/testing
+
+If KV writes fail with error code 10048, the daily write limit has been reached. Cache writes will silently fail (caught in try/catch), and metrics will be recomputed on each request. Limits reset at UTC midnight.
 
 ### Fallback Pattern
 Frontend tries Worker first, falls back to CORS proxy if Worker fails:
@@ -277,6 +295,9 @@ fetchQuotes(symbols)           // Batch quotes via Worker
 fetchProfiles(symbols)         // Batch profiles via Worker
 fetchExchangeRates(pairs)      // Batch FX via Worker
 isWorkerAvailable()            // Check if Worker is configured
+
+// Unified metrics (primary endpoint for Positions tab)
+fetchMetrics(symbols, benchmark)           // Beta, vol, returns, sparkline (24h cache)
 
 // Derived metrics (pre-computed by Worker)
 fetchBetas(symbols, benchmark, range)      // Beta vs benchmark
