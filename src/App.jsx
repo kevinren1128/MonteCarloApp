@@ -10,8 +10,8 @@ import {
   Sidebar,
 } from './components/common';
 
-// Hooks for autosave and undo/redo
-import { useAutosave, AutosaveStatus, useUndoRedo } from './hooks';
+// Hooks for autosave, undo/redo, and simulation
+import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation } from './hooks';
 
 // Crash recovery utilities
 import {
