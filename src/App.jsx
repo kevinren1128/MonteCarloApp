@@ -3900,18 +3900,37 @@ function MonteCarloSimulator() {
     // - useEwma is false (Worker uses equal-weight correlation)
     // - correlationMethod is 'sample' (Worker doesn't apply shrinkage)
     // - gldAsCash is false (Worker doesn't zero out GLD correlations)
-    // - Worker symbols match current tickers
+    // - Worker symbols match current tickers (unique comparison - portfolio may have duplicates)
+    const uniqueTickers = [...new Set(tickers.map(t => t.toUpperCase()))];
     const canUseWorkerCorrelation = workerCorrelation?.matrix &&
       !useEwma &&
       correlationMethod === 'sample' &&
       !gldAsCash &&
-      workerCorrelation.symbols?.length === tickers.length &&
-      tickers.every(t => workerCorrelation.symbols.includes(t.toUpperCase()));
+      workerCorrelation.symbols?.length === uniqueTickers.length &&
+      uniqueTickers.every(t => workerCorrelation.symbols.includes(t));
+
+    // Debug: log why Worker correlation can/cannot be used
+    if (!canUseWorkerCorrelation && workerCorrelation?.matrix) {
+      const reasons = [];
+      if (useEwma) reasons.push('EWMA enabled');
+      if (correlationMethod !== 'sample') reasons.push(`method=${correlationMethod}`);
+      if (gldAsCash) reasons.push('GLD-as-cash enabled');
+      if (workerCorrelation.symbols?.length !== uniqueTickers.length) {
+        reasons.push(`symbol count mismatch: Worker=${workerCorrelation.symbols?.length}, portfolio=${uniqueTickers.length}`);
+      }
+      if (!uniqueTickers.every(t => workerCorrelation.symbols?.includes(t))) {
+        const missing = uniqueTickers.filter(t => !workerCorrelation.symbols?.includes(t));
+        reasons.push(`missing symbols: ${missing.join(', ')}`);
+      }
+      console.log(`📊 Worker correlation available but not used: ${reasons.join(', ')}`);
+    } else if (!workerCorrelation?.matrix) {
+      console.log(`📊 No Worker correlation cached (run Load All first)`);
+    }
 
     if (canUseWorkerCorrelation) {
-      console.log(`⚡ Using Worker-cached correlation matrix (${workerCorrelation.symbols.length}x${workerCorrelation.symbols.length})`);
+      console.log(`⚡ Using Worker-cached correlation matrix (${workerCorrelation.symbols.length}x${workerCorrelation.symbols.length}, portfolio has ${tickers.length} positions)`);
 
-      // Reorder Worker matrix to match current ticker order
+      // Reorder Worker matrix to match current ticker order (handles duplicates - same ticker maps to same row)
       const workerSymbols = workerCorrelation.symbols;
       const reorderedMatrix = tickers.map((tickerI) => {
         const iWorker = workerSymbols.indexOf(tickerI.toUpperCase());
