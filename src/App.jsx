@@ -1480,6 +1480,10 @@ function MonteCarloSimulator() {
             p50: p.p50 ?? 0.08,
             p75: p.p75 ?? 0.20,
             p95: p.p95 ?? 0.40,
+            // Currency fields for international stocks
+            currency: p.currency || 'USD',
+            domesticPrice: p.domesticPrice ?? null,
+            exchangeRate: p.exchangeRate ?? 1,
           })));
         }
 

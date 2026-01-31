@@ -174,6 +174,10 @@ export async function fetchAllData() {
         p50: pos.p50 != null ? parseFloat(pos.p50) : 0.08,
         p75: pos.p75 != null ? parseFloat(pos.p75) : 0.20,
         p95: pos.p95 != null ? parseFloat(pos.p95) : 0.40,
+        // Currency fields for international stocks
+        currency: pos.currency || 'USD',
+        domesticPrice: pos.domestic_price ? parseFloat(pos.domestic_price) : null,
+        exchangeRate: pos.exchange_rate ? parseFloat(pos.exchange_rate) : 1,
       })),
 
       // Settings
@@ -302,6 +306,10 @@ export async function savePositions(positions, cashBalance = 0) {
         p50: p.p50,
         p75: p.p75,
         p95: p.p95,
+        // Currency fields for international stocks
+        currency: p.currency || 'USD',
+        domestic_price: p.domesticPrice || null,
+        exchange_rate: p.exchangeRate || 1,
       }));
 
       const { data: insertedData, error: insertError } = await supabase
