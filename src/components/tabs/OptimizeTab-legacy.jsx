@@ -792,7 +792,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: '24px', fontWeight: '700', color: COLORS.green, lineHeight: 1 }}>
-                {(bestSwap.deltaMetrics?.deltaMCSharpe || 0) >= 0 ? '+' : ''}{(bestSwap.deltaMetrics?.deltaMCSharpe || 0).toFixed(3)}
+                {(bestSwap.deltaMetrics?.deltaMCSharpe || 0) >= 0 ? '+' : ''}{Math.round((bestSwap.deltaMetrics?.deltaMCSharpe || 0) * 10000)} bps
               </div>
               <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>ΔSharpe (MC)</div>
             </div>
@@ -800,7 +800,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
           
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginTop: '14px' }}>
             {[
-              { label: 'ΔSharpe', value: (bestSwap.deltaMetrics?.deltaMCSharpe || 0).toFixed(3), unit: '', positive: true },
+              { label: 'ΔSharpe', value: Math.round((bestSwap.deltaMetrics?.deltaMCSharpe || 0) * 10000), unit: ' bps', positive: true },
               { label: 'ΔP(Loss)', value: (-(bestSwap.deltaMetrics?.deltaPLoss || 0) * 100).toFixed(2), unit: '%', positive: -(bestSwap.deltaMetrics?.deltaPLoss || 0) > 0 },
               { label: 'ΔVaR 5%', value: ((bestSwap.deltaMetrics?.deltaVaR5 || 0) * 100).toFixed(2), unit: '%', positive: (bestSwap.deltaMetrics?.deltaVaR5 || 0) > 0 },
               { label: 'ΔMedian', value: ((bestSwap.deltaMetrics?.deltaMedian || 0) * 100).toFixed(2), unit: '%', positive: (bestSwap.deltaMetrics?.deltaMedian || 0) > 0 },
@@ -870,7 +870,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
                   <span style={{ fontSize: '9px', color: '#666' }}>ΔSharpe</span>
                   <span style={{ fontSize: '12px', fontWeight: '700', color: isGood ? COLORS.green : COLORS.red, fontFamily: 'monospace' }}>
-                    {isGood ? '+' : ''}{deltaSharpe.toFixed(3)}
+                    {isGood ? '+' : ''}{Math.round(deltaSharpe * 10000)} bps
                   </span>
                 </div>
                 <div style={{ height: '3px', background: 'rgba(0,0,0,0.3)', borderRadius: '2px', overflow: 'hidden' }}>
@@ -1035,7 +1035,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                         fontFamily: 'monospace',
                         textShadow: isGood ? '0 0 10px rgba(46, 204, 113, 0.3)' : 'none',
                       }}>
-                        {isGood ? '+' : ''}{deltaSharpe.toFixed(3)}
+                        {isGood ? '+' : ''}{Math.round(deltaSharpe * 10000)} bps
                       </span>
                     </div>
                     
@@ -1186,7 +1186,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                           minWidth: '50px',
                           textAlign: 'right',
                         }}>
-                          {isGood ? '+' : ''}{deltaSharpe.toFixed(3)}
+                          {isGood ? '+' : ''}{Math.round(deltaSharpe * 10000)} bps
                         </span>
                       </div>
                     </div>
@@ -1409,7 +1409,7 @@ const RiskContributionCard = memo(({ optimizationResults, fmtPct }) => {
                       <span style={{ color: '#fff', fontWeight: '600' }}>{fmtPct(weightNLV)}</span>
                       <span style={{ color: '#888' }}>iSharpe:</span>
                       <span style={{ color: (pos.iSharpe || 0) > 0 ? COLORS.green : (pos.iSharpe || 0) < 0 ? COLORS.red : '#888', fontWeight: '600' }}>
-                        {(pos.iSharpe || 0) > 0 ? '+' : ''}{(pos.iSharpe ?? 0).toFixed(3)}
+                        {(pos.iSharpe || 0) > 0 ? '+' : ''}{Math.round((pos.iSharpe ?? 0) * 10000)} bps
                       </span>
                       <span style={{ color: '#888' }}>μ:</span>
                       <span style={{ color: (pos.mu || 0) >= 0 ? COLORS.green : COLORS.red }}>{fmtPct(pos.mu)}</span>
@@ -1488,7 +1488,7 @@ const RiskContributionCard = memo(({ optimizationResults, fmtPct }) => {
                   <td style={{ padding: '8px 6px', textAlign: 'right' }}>{fmtPct(pos.mctr)}</td>
                   <td style={{ padding: '8px 6px', textAlign: 'right' }}>{fmtPct(pos.riskContribution)}</td>
                   <td style={{ padding: '8px 6px', textAlign: 'right', fontWeight: '600', color: isPositive ? COLORS.green : isNegative ? COLORS.red : '#666' }}>
-                    {(pos.iSharpe || 0) > 0 ? '+' : ''}{(pos.iSharpe ?? 0).toFixed(3)}
+                    {(pos.iSharpe || 0) > 0 ? '+' : ''}{Math.round((pos.iSharpe ?? 0) * 10000)} bps
                   </td>
                   <td style={{ padding: '8px 6px', textAlign: 'center', fontSize: '11px' }}>
                     {isPositive && <span title="Consider adding">⬆️</span>}
@@ -1690,7 +1690,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
           }}>
             <span style={{ color: '#666' }}>Max Δ:</span>
             <span style={{ color: COLORS.cyan, fontWeight: '600', marginLeft: '4px' }}>
-              {bestSwap ? `+${bestSwap.deltaSharpe.toFixed(3)}` : '-'}
+              {bestSwap ? `+${Math.round(bestSwap.deltaSharpe * 10000)} bps` : '-'}
             </span>
           </div>
         </div>
@@ -1717,7 +1717,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
               Sell {bestSwap.sell} → Buy {bestSwap.buy}
             </div>
             <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-              ΔSharpe: <span style={{ color: COLORS.green }}>+{bestSwap.deltaSharpe.toFixed(3)}</span>
+              ΔSharpe: <span style={{ color: COLORS.green }}>+{Math.round(bestSwap.deltaSharpe * 10000)} bps</span>
               <span style={{ margin: '0 6px', color: '#444' }}>|</span>
               ΔVol: <span style={{ color: bestSwap.deltaVol < 0 ? COLORS.green : COLORS.orange }}>
                 {(bestSwap.deltaVol * 100).toFixed(2)}%
@@ -1738,7 +1738,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
               Sell {worstSwap.sell} → Buy {worstSwap.buy}
             </div>
             <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-              ΔSharpe: <span style={{ color: COLORS.red }}>{worstSwap.deltaSharpe.toFixed(3)}</span>
+              ΔSharpe: <span style={{ color: COLORS.red }}>{Math.round(worstSwap.deltaSharpe * 10000)} bps</span>
               <span style={{ margin: '0 6px', color: '#444' }}>|</span>
               ΔVol: <span style={{ color: worstSwap.deltaVol > 0 ? COLORS.red : COLORS.green }}>
                 {worstSwap.deltaVol > 0 ? '+' : ''}{(worstSwap.deltaVol * 100).toFixed(2)}%
@@ -1878,7 +1878,7 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
                       color: delta > 0 ? COLORS.green : delta < 0 ? COLORS.red : '#888',
                       fontFamily: 'monospace',
                     }}>
-                      {delta > 0 ? '+' : ''}{delta.toFixed(3)}
+                      {delta > 0 ? '+' : ''}{Math.round(delta * 10000)} bps
                     </div>
                     <div style={{ fontSize: '8px', color: '#666', marginTop: '2px' }}>ΔSharpe</div>
                   </div>
@@ -2222,7 +2222,7 @@ const RiskParityCard = memo(({ optimizationResults, fmtPct }) => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '14px' }}>
         {[
           { label: 'RP Sharpe', value: (rp.sharpe ?? 0).toFixed(3), color: COLORS.purple },
-          { label: 'ΔSharpe', value: `${(rp.deltaSharpe || 0) > 0 ? '+' : ''}${(rp.deltaSharpe ?? 0).toFixed(4)}`, color: (rp.deltaSharpe || 0) > 0 ? COLORS.green : COLORS.red },
+          { label: 'ΔSharpe', value: `${(rp.deltaSharpe || 0) > 0 ? '+' : ''}${Math.round((rp.deltaSharpe ?? 0) * 10000)} bps`, color: (rp.deltaSharpe || 0) > 0 ? COLORS.green : COLORS.red },
           { label: 'RP Vol', value: fmtPct(rp.portfolioVol), color: COLORS.orange },
         ].map((s, i) => (
           <div key={i} style={{ padding: '10px', background: 'rgba(0,0,0,0.25)', borderRadius: '8px', textAlign: 'center' }}>
