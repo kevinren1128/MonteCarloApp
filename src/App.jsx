@@ -13,6 +13,10 @@ import {
 // Hooks for autosave, undo/redo, and simulation
 import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation } from './hooks';
 
+// Auth components
+import { UserMenu } from './components/auth';
+import { useAuth } from './contexts/AuthContext';
+
 // Crash recovery utilities
 import {
   checkRecoveryNeeded,
@@ -1061,6 +1065,9 @@ const calculateSampleCorrelation = (returnsMatrix) => {
 
 // Main App Component
 function MonteCarloSimulator() {
+  // Auth state
+  const { state: authState } = useAuth();
+
   // Load saved data on mount
   const savedData = useMemo(() => loadFromStorage(), []);
   
@@ -6380,6 +6387,7 @@ function MonteCarloSimulator() {
             hasContent: false,
           },
         }}
+        UserMenu={UserMenu}
       />
 
       {/* Main Content Area */}

@@ -230,16 +230,12 @@ const Sidebar = memo(({
             <span style={styles.logoIcon}>🎲</span>
             <span style={styles.logoText}>Monte Carlo</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-            {/* User menu - auth and sync status */}
-            {UserMenu && (
-              <UserMenu syncStatus={syncStatus} onSync={onSync} />
-            )}
-            {/* Autosave indicator - in header for visibility */}
-            {AutosaveIndicator && (
+          {/* Autosave indicator - in header for visibility */}
+          {AutosaveIndicator && (
+            <div style={{ flexShrink: 0 }}>
               <AutosaveIndicator status={autosaveStatus} compact={true} />
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Portfolio Value - Expanded */}
@@ -382,10 +378,23 @@ const Sidebar = memo(({
         })}
       </nav>
 
+      {/* User Account Section */}
+      {UserMenu && (
+        <div style={{
+          padding: '12px 8px',
+          borderTop: '1px solid rgba(42, 42, 74, 0.4)',
+          display: 'flex',
+          justifyContent: isExpanded ? 'flex-start' : 'center',
+          flexShrink: 0,
+        }}>
+          <UserMenu syncStatus={syncStatus} onSync={onSync} />
+        </div>
+      )}
+
       {/* Actions Section */}
       <div style={{
         padding: '12px 8px',
-        borderTop: '1px solid rgba(42, 42, 74, 0.4)',
+        borderTop: UserMenu ? 'none' : '1px solid rgba(42, 42, 74, 0.4)',
         display: 'flex',
         flexDirection: 'column',
         gap: '6px',
