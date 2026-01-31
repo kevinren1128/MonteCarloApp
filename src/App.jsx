@@ -32,6 +32,9 @@ import { styles } from './styles/appStyles';
 // Yahoo Finance API service
 import { fetchYahooQuote } from './services/yahooFinance';
 
+// FMP API service for consensus data
+import { batchFetchConsensusData, getApiKey as getFmpApiKey } from './services/fmpService';
+
 // Portfolio optimization utilities
 import {
   buildCovarianceMatrix,
@@ -5834,6 +5837,7 @@ function MonteCarloSimulator() {
       { name: 'Running Simulation', icon: '🎲' },
       { name: 'Running Factor Analysis', icon: '🧬' },
       { name: 'Running Optimization', icon: '🎯' },
+      { name: 'Loading Consensus Data', icon: '📋' },
     ];
     
     try {
@@ -5925,7 +5929,37 @@ function MonteCarloSimulator() {
       console.log(`\n${'='.repeat(50)}\n🎯 FULL LOAD: Step 8/${steps.length} - ${steps[7].name}\n${'='.repeat(50)}`);
 
       await runPortfolioOptimization(finalCorrelation);
-      
+      await new Promise(r => setTimeout(r, 300));
+
+      // Step 9: Load consensus data from FMP API
+      setFullLoadProgress({ step: 9, total: steps.length, phase: steps[8].name, detail: 'Fetching analyst estimates...' });
+      console.log(`\n${'='.repeat(50)}\n📋 FULL LOAD: Step 9/${steps.length} - ${steps[8].name}\n${'='.repeat(50)}`);
+
+      const fmpApiKey = getFmpApiKey();
+      if (fmpApiKey) {
+        try {
+          const consensusData = await batchFetchConsensusData(tickers, fmpApiKey, (progress) => {
+            setFullLoadProgress({
+              step: 9,
+              total: steps.length,
+              phase: steps[8].name,
+              detail: `${progress.loaded}/${progress.total} tickers loaded...`
+            });
+          });
+
+          // Save to localStorage with the same keys ConsensusTab uses
+          if (consensusData && Object.keys(consensusData).length > 0) {
+            localStorage.setItem('monte-carlo-consensus-data', JSON.stringify(consensusData));
+            localStorage.setItem('monte-carlo-consensus-timestamp', Date.now().toString());
+            console.log(`✅ Consensus data loaded for ${Object.keys(consensusData).length} tickers`);
+          }
+        } catch (consensusError) {
+          console.warn('Consensus data fetch failed (non-critical):', consensusError.message);
+        }
+      } else {
+        console.log('No FMP API key configured, skipping consensus data');
+      }
+
       // Complete!
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
       setFullLoadProgress({ step: steps.length, total: steps.length, phase: 'Complete!', detail: `All steps finished in ${elapsed}s` });

@@ -9,16 +9,22 @@
 const BASE_URL = 'https://financialmodelingprep.com/stable';
 const STORAGE_KEY = 'monte-carlo-fmp-api-key';
 
+// Hard-coded API key for personal use
+const HARDCODED_API_KEY = 'Cbi6bOmaPoRO90xUCTRTR5k2WNffrfdK';
+
 // Cache for ETF list to avoid repeated API calls
 let etfListCache = null;
 let etfListCacheTime = 0;
 const ETF_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
- * Get API key from environment or localStorage
+ * Get API key - uses hardcoded key, environment variable, or localStorage
  */
 export const getApiKey = () => {
-  // Check environment variable first (Vite format)
+  // Use hardcoded key first
+  if (HARDCODED_API_KEY) return HARDCODED_API_KEY;
+
+  // Check environment variable (Vite format)
   const envKey = import.meta.env?.VITE_FMP_API_KEY;
   if (envKey) return envKey;
 
