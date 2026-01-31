@@ -41,6 +41,10 @@ const Sidebar = memo(({
   marketDataProgress,
   // Status indicators for tabs
   tabStatus = {},
+  // Auth
+  UserMenu,
+  syncStatus,
+  onSync,
 }) => {
   const sidebarWidth = isExpanded ? 220 : 56;
 
@@ -226,12 +230,16 @@ const Sidebar = memo(({
             <span style={styles.logoIcon}>🎲</span>
             <span style={styles.logoText}>Monte Carlo</span>
           </div>
-          {/* Autosave indicator - in header for visibility */}
-          {AutosaveIndicator && (
-            <div style={{ flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {/* User menu - auth and sync status */}
+            {UserMenu && (
+              <UserMenu syncStatus={syncStatus} onSync={onSync} />
+            )}
+            {/* Autosave indicator - in header for visibility */}
+            {AutosaveIndicator && (
               <AutosaveIndicator status={autosaveStatus} compact={true} />
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Portfolio Value - Expanded */}

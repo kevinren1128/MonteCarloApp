@@ -29,6 +29,9 @@ export { useFactorAnalysis } from './useFactorAnalysis';
 export { useSimulation } from './useSimulation';
 export { useOptimization } from './useOptimization';
 
+// Portfolio sync hook (server persistence)
+export { usePortfolioSync } from './usePortfolioSync';
+
 /**
  * HOOK EXTRACTION GUIDE
  * =====================

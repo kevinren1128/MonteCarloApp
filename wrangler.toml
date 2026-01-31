@@ -1,0 +1,37 @@
+# Cloudflare Worker Configuration
+# See: https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "monte-carlo-cache"
+main = "worker/index.js"
+compatibility_date = "2024-01-01"
+
+# KV Namespace binding
+# 1. Create a KV namespace in Cloudflare dashboard: Workers & Pages -> KV -> Create namespace
+# 2. Name it "MONTE_CARLO_CACHE"
+# 3. Copy the namespace ID and paste below
+[[kv_namespaces]]
+binding = "CACHE"
+id = "<YOUR_KV_NAMESPACE_ID>"
+# preview_id = "<YOUR_PREVIEW_KV_NAMESPACE_ID>"  # Optional: for wrangler dev
+
+# Environment variables / Secrets
+# Set these in Cloudflare dashboard: Workers -> your worker -> Settings -> Variables
+# - FMP_API_KEY: Your Financial Modeling Prep API key
+
+# Routes (optional - use if you want custom domain)
+# routes = [
+#   { pattern = "api.yourdomain.com/*", zone_name = "yourdomain.com" }
+# ]
+
+# Development settings
+[dev]
+port = 8787
+local_protocol = "http"
+
+# Build settings (if using TypeScript or bundler)
+# [build]
+# command = "npm run build"
+
+# Deployment triggers
+# [triggers]
+# crons = []  # No scheduled triggers for this worker
