@@ -5938,12 +5938,12 @@ function MonteCarloSimulator() {
       const fmpApiKey = getFmpApiKey();
       if (fmpApiKey) {
         try {
-          const consensusData = await batchFetchConsensusData(tickers, fmpApiKey, (progress) => {
+          const consensusData = await batchFetchConsensusData(tickers, fmpApiKey, (current, total, ticker) => {
             setFullLoadProgress({
               step: 9,
               total: steps.length,
               phase: steps[8].name,
-              detail: `${progress.loaded}/${progress.total} tickers loaded...`
+              detail: `${current}/${total} tickers loaded...`
             });
           });
 
