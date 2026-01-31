@@ -94,24 +94,44 @@ async function fetchFromWorker(endpoint, params = {}, timeout = 15000) {
  * @param {string[]} symbols - Array of ticker symbols
  * @param {string} range - Time range ('1y', '2y', '5y', etc.)
  * @param {string} interval - Data interval ('1d', '1wk', '1mo')
+ * @param {Object} options - Additional options
+ * @param {string} options.currency - Target currency ('USD' for conversion)
  * @returns {Promise<Object>} Map of symbol -> price data
  */
-export async function fetchPrices(symbols, range = '1y', interval = '1d') {
+export async function fetchPrices(symbols, range = '1y', interval = '1d', options = {}) {
+  const { currency } = options;
+
   // Try Worker first
   if (isWorkerConfigured) {
-    const data = await fetchFromWorker('/api/prices', {
+    const params = {
       symbols: symbols.join(','),
       range,
       interval,
-    });
+    };
+    // Add currency param for USD conversion
+    if (currency) {
+      params.currency = currency;
+    }
+
+    const data = await fetchFromWorker('/api/prices', params);
 
     if (data) {
-      console.log(`[MarketService] Fetched ${Object.keys(data).length} symbols from Worker`);
-      return transformWorkerPrices(data);
+      // Extract _fx summary if present (used for USD conversion)
+      const fxSummary = data._fx;
+      delete data._fx;
+
+      console.log(`[MarketService] Fetched ${Object.keys(data).length} symbols from Worker${currency ? ` (${currency} converted)` : ''}`);
+      const transformed = transformWorkerPrices(data);
+
+      // Attach FX summary to result for client reference
+      if (fxSummary) {
+        transformed._fx = fxSummary;
+      }
+      return transformed;
     }
   }
 
-  // Fallback to direct Yahoo API
+  // Fallback to direct Yahoo API (no USD conversion in fallback)
   console.log('[MarketService] Falling back to direct Yahoo API');
   const results = {};
 
@@ -134,21 +154,35 @@ export async function fetchPrices(symbols, range = '1y', interval = '1d') {
  * Fetch current quotes for multiple symbols
  *
  * @param {string[]} symbols - Array of ticker symbols
+ * @param {Object} options - Additional options
+ * @param {string} options.currency - Target currency ('USD' for conversion)
  * @returns {Promise<Object>} Map of symbol -> quote data
  */
-export async function fetchQuotes(symbols) {
+export async function fetchQuotes(symbols, options = {}) {
+  const { currency } = options;
+
   // Try Worker first
   if (isWorkerConfigured) {
-    const data = await fetchFromWorker('/api/quotes', {
-      symbols: symbols.join(','),
-    });
+    const params = { symbols: symbols.join(',') };
+    if (currency) {
+      params.currency = currency;
+    }
+
+    const data = await fetchFromWorker('/api/quotes', params);
 
     if (data) {
+      // Extract _fx summary if present
+      const fxSummary = data._fx;
+      delete data._fx;
+
+      if (fxSummary) {
+        data._fx = fxSummary;
+      }
       return data;
     }
   }
 
-  // Fallback to direct Yahoo API
+  // Fallback to direct Yahoo API (no USD conversion in fallback)
   const results = {};
 
   await Promise.all(symbols.map(async (symbol) => {
@@ -256,6 +290,7 @@ export async function fetchConsensus(symbols) {
 
 /**
  * Transform Worker price response to match expected format
+ * Preserves USD conversion fields if present
  */
 function transformWorkerPrices(workerData) {
   const results = {};
@@ -270,6 +305,12 @@ function transformWorkerPrices(workerData) {
       currency: data.currency || 'USD',
       meta: data.meta || {},
       cached: data.cached || false,
+      // USD conversion fields (present when currency=USD was requested)
+      ...(data.localCurrency && { localCurrency: data.localCurrency }),
+      ...(data.localPrices && { localPrices: data.localPrices }),
+      ...(data.fxRate !== undefined && { fxRate: data.fxRate }),
+      ...(data.fxTimestamp && { fxTimestamp: data.fxTimestamp }),
+      ...(data.fxError && { fxError: data.fxError }),
     };
   }
 

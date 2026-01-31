@@ -13,12 +13,19 @@
  * 7. Update wrangler.toml with your namespace ID
  *
  * API Endpoints:
- *   GET /api/prices?symbols=AAPL,MSFT&range=1y    - Historical prices (Yahoo)
- *   GET /api/quotes?symbols=AAPL,MSFT             - Current quotes (Yahoo)
- *   GET /api/profile?symbols=AAPL                 - Company profiles (Yahoo)
- *   GET /api/consensus?symbols=AAPL               - Analyst estimates (FMP)
- *   GET /api/fx?pairs=EURUSD,GBPUSD              - Exchange rates (Yahoo)
- *   GET ?url=...                                  - Legacy proxy mode
+ *   GET /api/prices?symbols=AAPL,MSFT&range=1y           - Historical prices (Yahoo)
+ *   GET /api/prices?symbols=AAPL,VOD.L&range=1y&currency=USD  - Prices converted to USD
+ *   GET /api/quotes?symbols=AAPL,MSFT                    - Current quotes (Yahoo)
+ *   GET /api/quotes?symbols=AAPL,VOD.L&currency=USD      - Quotes converted to USD
+ *   GET /api/profile?symbols=AAPL                        - Company profiles (Yahoo)
+ *   GET /api/consensus?symbols=AAPL                      - Analyst estimates (FMP)
+ *   GET /api/fx?pairs=EURUSD,GBPUSD                      - Exchange rates (Yahoo)
+ *   GET ?url=...                                         - Legacy proxy mode
+ *
+ * USD Conversion (currency=USD):
+ *   When specified, non-USD prices are converted using spot FX rates.
+ *   Response includes: localCurrency, localPrices/localPrice, fxRate, fxTimestamp
+ *   FX rates are cached for 24h. A _fx summary block is added to the response.
  */
 
 // ============================================
@@ -215,17 +222,19 @@ async function handlePrices(url, env, requestId) {
   const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
   const range = url.searchParams.get('range') || '1y';
   const interval = url.searchParams.get('interval') || '1d';
+  const targetCurrency = url.searchParams.get('currency')?.toUpperCase(); // Optional: 'USD' for conversion
 
   if (symbols.length === 0) {
     log.warn('Missing symbols param', { requestId, handler: 'prices' });
     return jsonResponse({ error: 'symbols parameter required' }, 400);
   }
 
-  log.info('Fetching prices', { requestId, symbols, range, interval });
+  log.info('Fetching prices', { requestId, symbols, range, interval, targetCurrency });
 
   const results = {};
   const cacheStats = { hits: 0, misses: 0 };
 
+  // Step 1: Fetch all price data
   const promises = symbols.map(async (symbol) => {
     const cacheKey = `prices:v1:${symbol.toUpperCase()}:${range}:${interval}`;
 
@@ -248,23 +257,157 @@ async function handlePrices(url, env, requestId) {
 
   await Promise.all(promises);
 
-  log.info('Prices complete', { requestId, symbolCount: symbols.length, ...cacheStats });
+  // Step 2: If currency=USD requested, convert non-USD prices
+  let fxSummary = null;
+  if (targetCurrency === 'USD') {
+    const conversionResult = await convertPricesToUSD(results, env, requestId);
+    fxSummary = conversionResult.fxSummary;
+    // results is mutated in place by convertPricesToUSD
+  }
+
+  log.info('Prices complete', {
+    requestId,
+    symbolCount: symbols.length,
+    ...cacheStats,
+    usdConverted: targetCurrency === 'USD'
+  });
+
+  // Include FX summary in response if conversion was done
+  if (fxSummary && Object.keys(fxSummary).length > 0) {
+    return jsonResponse({ ...results, _fx: fxSummary });
+  }
   return jsonResponse(results);
 }
 
 /**
+ * Convert price results to USD using FX rates
+ * Mutates the results object in place, adding USD-converted fields
+ */
+async function convertPricesToUSD(results, env, requestId) {
+  const fxSummary = {};
+  const fxTimestamp = new Date().toISOString();
+
+  // Collect unique non-USD currencies
+  const currenciesNeeded = new Set();
+  for (const [symbol, data] of Object.entries(results)) {
+    if (data && data.currency && data.currency !== 'USD') {
+      currenciesNeeded.add(data.currency);
+    }
+  }
+
+  if (currenciesNeeded.size === 0) {
+    // All USD, just add the USD fields for consistency
+    for (const [symbol, data] of Object.entries(results)) {
+      if (data && data.prices) {
+        data.localCurrency = 'USD';
+        data.localPrices = data.prices;
+        data.fxRate = 1;
+        data.fxTimestamp = fxTimestamp;
+        if (data.meta) {
+          data.meta.localPrice = data.meta.regularMarketPrice;
+        }
+      }
+    }
+    return { fxSummary };
+  }
+
+  log.info('Fetching FX rates for USD conversion', { requestId, currencies: [...currenciesNeeded] });
+
+  // Fetch FX rates for all needed currencies
+  const fxRates = { USD: 1 };
+  const fxPromises = [...currenciesNeeded].map(async (currency) => {
+    const pair = `${currency}USD`;
+    const cacheKey = `fx:v1:${pair}`;
+
+    // Check cache first
+    let fxData = await getCached(env, cacheKey, requestId);
+    if (!fxData) {
+      fxData = await fetchYahooFx(pair, requestId);
+      if (fxData) {
+        await setCache(env, cacheKey, fxData, CACHE_TTLS.fx, requestId);
+      }
+    }
+
+    if (fxData && fxData.rate) {
+      fxRates[currency] = fxData.rate;
+      fxSummary[currency] = {
+        rate: fxData.rate,
+        pair,
+        timestamp: fxTimestamp,
+        cached: !!fxData.cached
+      };
+    } else {
+      log.warn('FX rate unavailable', { requestId, currency, pair });
+      fxRates[currency] = null;
+      fxSummary[currency] = {
+        rate: null,
+        pair,
+        error: 'Rate unavailable'
+      };
+    }
+  });
+
+  await Promise.all(fxPromises);
+
+  // Convert each symbol's prices to USD
+  for (const [symbol, data] of Object.entries(results)) {
+    if (!data || !data.prices) continue;
+
+    const localCurrency = data.currency || 'USD';
+    const fxRate = fxRates[localCurrency];
+
+    // Store original values
+    data.localCurrency = localCurrency;
+    data.localPrices = [...data.prices];
+    data.fxTimestamp = fxTimestamp;
+
+    if (localCurrency === 'USD') {
+      data.fxRate = 1;
+      if (data.meta) {
+        data.meta.localPrice = data.meta.regularMarketPrice;
+      }
+    } else if (fxRate && fxRate !== null) {
+      // Convert prices to USD
+      data.currency = 'USD';
+      data.fxRate = Math.round(fxRate * 10000) / 10000; // 4 decimal precision
+      data.prices = data.localPrices.map(p =>
+        p !== null ? Math.round(p * fxRate * 10000) / 10000 : null
+      );
+      if (data.meta) {
+        data.meta.localPrice = data.meta.regularMarketPrice;
+        data.meta.regularMarketPrice = data.meta.regularMarketPrice
+          ? Math.round(data.meta.regularMarketPrice * fxRate * 100) / 100
+          : null;
+      }
+      log.info('Converted to USD', { requestId, symbol, localCurrency, fxRate });
+    } else {
+      // FX rate unavailable - keep local currency, mark as unconverted
+      data.fxRate = null;
+      data.fxError = `FX rate unavailable for ${localCurrency}`;
+      if (data.meta) {
+        data.meta.localPrice = data.meta.regularMarketPrice;
+      }
+      log.warn('Could not convert to USD', { requestId, symbol, localCurrency });
+    }
+  }
+
+  return { fxSummary };
+}
+
+/**
  * Current quotes from Yahoo Finance
- * GET /api/quotes?symbols=AAPL,MSFT
+ * GET /api/quotes?symbols=AAPL,MSFT&currency=USD
  */
 async function handleQuotes(url, env, requestId) {
   const symbols = (url.searchParams.get('symbols') || '').split(',').filter(Boolean);
+  const targetCurrency = url.searchParams.get('currency')?.toUpperCase();
 
   if (symbols.length === 0) {
     log.warn('Missing symbols param', { requestId, handler: 'quotes' });
     return jsonResponse({ error: 'symbols parameter required' }, 400);
   }
 
-  log.info('Fetching quotes', { requestId, symbols });
+  log.info('Fetching quotes', { requestId, symbols, targetCurrency });
 
   const results = {};
   const cacheStats = { hits: 0, misses: 0 };
@@ -289,8 +432,105 @@ async function handleQuotes(url, env, requestId) {
 
   await Promise.all(promises);
 
-  log.info('Quotes complete', { requestId, symbolCount: symbols.length, ...cacheStats });
+  // Convert to USD if requested
+  let fxSummary = null;
+  if (targetCurrency === 'USD') {
+    const conversionResult = await convertQuotesToUSD(results, env, requestId);
+    fxSummary = conversionResult.fxSummary;
+  }
+
+  log.info('Quotes complete', { requestId, symbolCount: symbols.length, ...cacheStats, usdConverted: targetCurrency === 'USD' });
+
+  if (fxSummary && Object.keys(fxSummary).length > 0) {
+    return jsonResponse({ ...results, _fx: fxSummary });
+  }
   return jsonResponse(results);
+}
+
+/**
+ * Convert quote results to USD using FX rates
+ * Mutates the results object in place
+ */
+async function convertQuotesToUSD(results, env, requestId) {
+  const fxSummary = {};
+  const fxTimestamp = new Date().toISOString();
+
+  // Collect unique non-USD currencies
+  const currenciesNeeded = new Set();
+  for (const [symbol, data] of Object.entries(results)) {
+    if (data && data.currency && data.currency !== 'USD') {
+      currenciesNeeded.add(data.currency);
+    }
+  }
+
+  if (currenciesNeeded.size === 0) {
+    // All USD, just add USD fields for consistency
+    for (const [symbol, data] of Object.entries(results)) {
+      if (data && data.price) {
+        data.localCurrency = 'USD';
+        data.localPrice = data.price;
+        data.fxRate = 1;
+        data.fxTimestamp = fxTimestamp;
+      }
+    }
+    return { fxSummary };
+  }
+
+  log.info('Fetching FX rates for quote USD conversion', { requestId, currencies: [...currenciesNeeded] });
+
+  // Fetch FX rates
+  const fxRates = { USD: 1 };
+  const fxPromises = [...currenciesNeeded].map(async (currency) => {
+    const pair = `${currency}USD`;
+    const cacheKey = `fx:v1:${pair}`;
+
+    let fxData = await getCached(env, cacheKey, requestId);
+    if (!fxData) {
+      fxData = await fetchYahooFx(pair, requestId);
+      if (fxData) {
+        await setCache(env, cacheKey, fxData, CACHE_TTLS.fx, requestId);
+      }
+    }
+
+    if (fxData && fxData.rate) {
+      fxRates[currency] = fxData.rate;
+      fxSummary[currency] = { rate: fxData.rate, pair, timestamp: fxTimestamp };
+    } else {
+      fxRates[currency] = null;
+      fxSummary[currency] = { rate: null, pair, error: 'Rate unavailable' };
+    }
+  });
+
+  await Promise.all(fxPromises);
+
+  // Convert each quote to USD
+  for (const [symbol, data] of Object.entries(results)) {
+    if (!data || !data.price) continue;
+
+    const localCurrency = data.currency || 'USD';
+    const fxRate = fxRates[localCurrency];
+
+    data.localCurrency = localCurrency;
+    data.localPrice = data.price;
+    data.fxTimestamp = fxTimestamp;
+
+    if (localCurrency === 'USD') {
+      data.fxRate = 1;
+    } else if (fxRate && fxRate !== null) {
+      data.currency = 'USD';
+      data.fxRate = Math.round(fxRate * 10000) / 10000;
+      data.price = Math.round(data.localPrice * fxRate * 100) / 100;
+      if (data.previousClose) {
+        data.localPreviousClose = data.previousClose;
+        data.previousClose = Math.round(data.previousClose * fxRate * 100) / 100;
+      }
+    } else {
+      data.fxRate = null;
+      data.fxError = `FX rate unavailable for ${localCurrency}`;
+    }
+  }
+
+  return { fxSummary };
 }
 
 /**

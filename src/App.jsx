@@ -2094,7 +2094,8 @@ function MonteCarloSimulator() {
         if (!ticker) continue;
 
         try {
-          const historyResult = await fetchYahooHistory(ticker, '5y', '1d');
+          // Request USD-converted prices from Worker (server handles FX conversion)
+          const historyResult = await fetchYahooHistory(ticker, '5y', '1d', { currency: 'USD' });
           completedCount++;
           const daysCount = historyResult?.prices?.length || 0;
           setUnifiedFetchProgress({
@@ -2108,6 +2109,10 @@ function MonteCarloSimulator() {
             data: historyResult?.prices || null,
             currency: historyResult?.currency || 'USD',
             regularMarketPrice: historyResult?.regularMarketPrice,
+            // Worker-side FX conversion metadata
+            localCurrency: historyResult?.localCurrency,
+            localPrices: historyResult?.localPrices,
+            fxRate: historyResult?.fxRate,
             cached: false
           });
         } catch (err) {
@@ -2195,20 +2200,36 @@ function MonteCarloSimulator() {
     });
 
     // Build quick price map from history results (before full processing)
+    // Worker now returns USD-converted prices with localCurrency/fxRate metadata
     const quickPriceUpdates = {};
     for (const ticker of tickers) { // Only position tickers, not factor ETFs
       const histResult = historyResults[ticker];
       if (histResult?.data?.length > 0) {
         const lastPrice = histResult.data[histResult.data.length - 1];
         const closePrice = typeof lastPrice === 'number' ? lastPrice : lastPrice?.close;
-        const currency = histResult.currency || 'USD';
-        const rate = exchangeRates[currency] || 1;
-        quickPriceUpdates[ticker] = {
-          currentPrice: closePrice * rate,
-          domesticPrice: closePrice,
-          currency,
-          exchangeRate: rate,
-        };
+
+        // Worker provides USD-converted prices with metadata about original currency
+        if (histResult.localCurrency && histResult.fxRate) {
+          // Worker did the conversion - use metadata directly
+          const localPrices = histResult.localPrices || [];
+          const domesticPrice = localPrices.length > 0 ? localPrices[localPrices.length - 1] : closePrice;
+          quickPriceUpdates[ticker] = {
+            currentPrice: closePrice, // Already in USD from Worker
+            domesticPrice,
+            currency: histResult.localCurrency, // Original currency for display
+            exchangeRate: histResult.fxRate,
+          };
+        } else {
+          // Fallback path: do client-side FX conversion if needed
+          const currency = histResult.currency || 'USD';
+          const rate = exchangeRates[currency] || 1;
+          quickPriceUpdates[ticker] = {
+            currentPrice: closePrice * rate,
+            domesticPrice: closePrice,
+            currency,
+            exchangeRate: rate,
+          };
+        }
       } else if (newData[ticker]?.currentPrice) {
         // Use cached data if available
         const cached = newData[ticker];

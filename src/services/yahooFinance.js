@@ -434,14 +434,21 @@ export const fetchYahooQuote = async (symbol) => {
  * @param {string} symbol - Ticker symbol
  * @param {string} range - Time range ('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', 'max')
  * @param {string} interval - Data interval ('1d', '1wk', '1mo')
- * @returns {Promise<{prices: Array<{date: Date, close: number}>, currency: string, regularMarketPrice: number}|null>}
+ * @param {Object} options - Additional options
+ * @param {string} options.currency - Target currency ('USD' for conversion)
+ * @returns {Promise<{prices: Array<{date: Date, close: number}>, currency: string, regularMarketPrice: number, localCurrency?: string, localPrices?: number[], fxRate?: number}|null>}
  */
-export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') => {
+export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d', options = {}) => {
   const startTime = performance.now();
+  const { currency } = options;
 
   // Try Cloudflare Worker first (shared cache)
   if (isWorkerConfigured) {
-    const workerData = await fetchFromWorker('/api/prices', { symbols: symbol, range, interval });
+    const params = { symbols: symbol, range, interval };
+    if (currency) {
+      params.currency = currency;
+    }
+    const workerData = await fetchFromWorker('/api/prices', params);
     if (workerData?.[symbol]) {
       const d = workerData[symbol];
       const prices = [];
@@ -457,11 +464,23 @@ export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') =
       }
       if (prices.length > 0) {
         const duration = Math.round(performance.now() - startTime);
-        logger.info('History from Worker', { symbol, dataPoints: prices.length, range, duration });
+        const wasConverted = currency === 'USD' && d.localCurrency && d.localCurrency !== 'USD';
+        logger.info('History from Worker', {
+          symbol,
+          dataPoints: prices.length,
+          range,
+          duration,
+          ...(wasConverted && { converted: `${d.localCurrency}→USD`, fxRate: d.fxRate })
+        });
         return {
           prices,
           currency: d.currency || 'USD',
           regularMarketPrice: d.meta?.regularMarketPrice || closes[closes.length - 1],
+          // USD conversion metadata (present when currency=USD was requested for non-USD assets)
+          ...(d.localCurrency && { localCurrency: d.localCurrency }),
+          ...(d.localPrices && { localPrices: d.localPrices }),
+          ...(d.fxRate !== undefined && { fxRate: d.fxRate }),
+          ...(d.fxTimestamp && { fxTimestamp: d.fxTimestamp }),
         };
       }
     }
