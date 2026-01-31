@@ -1468,6 +1468,10 @@ const ExposureChartsCard = memo(({
   grossPositionsValue,
   netExposure,
 }) => {
+  // Track expanded state for long/short position lists
+  const [longsExpanded, setLongsExpanded] = useState(false);
+  const [shortsExpanded, setShortsExpanded] = useState(false);
+
   const nlv = Math.abs(portfolioValue) || 1;
   
   // Calculate position data for charts
@@ -1538,21 +1542,21 @@ const ExposureChartsCard = memo(({
             </div>
           ) : (
             <div>
-              {longs.slice(0, 8).map((p, i) => {
+              {(longsExpanded ? longs : longs.slice(0, 8)).map((p, i) => {
                 const pctOfNLV = (p.value / nlv) * 100;
                 return (
                   <div key={i} style={{ marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
                       <span style={{ color: '#fff', fontWeight: '500' }}>{p.ticker}</span>
                       <span style={{ color: COLORS.green }}>
-                        ${p.value.toLocaleString(undefined, { maximumFractionDigits: 0 })} 
+                        ${p.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         <span style={{ opacity: 0.7, marginLeft: '4px' }}>({pctOfNLV.toFixed(1)}%)</span>
                       </span>
                     </div>
                     <div style={{ height: '6px', background: 'rgba(46, 204, 113, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ 
-                        width: `${Math.min(100, pctOfNLV)}%`, 
-                        height: '100%', 
+                      <div style={{
+                        width: `${Math.min(100, pctOfNLV)}%`,
+                        height: '100%',
                         background: `linear-gradient(90deg, ${COLORS.green} 0%, rgba(46, 204, 113, 0.6) 100%)`,
                         borderRadius: '3px',
                         transition: 'width 0.3s ease',
@@ -1562,9 +1566,27 @@ const ExposureChartsCard = memo(({
                 );
               })}
               {longs.length > 8 && (
-                <div style={{ fontSize: '10px', color: '#555', marginTop: '8px' }}>
-                  +{longs.length - 8} more positions
-                </div>
+                <button
+                  onClick={() => setLongsExpanded(!longsExpanded)}
+                  style={{
+                    fontSize: '10px',
+                    color: COLORS.cyan,
+                    marginTop: '8px',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '4px 0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  {longsExpanded ? (
+                    <>▲ Show less</>
+                  ) : (
+                    <>▼ +{longs.length - 8} more positions</>
+                  )}
+                </button>
               )}
               <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(46, 204, 113, 0.15)', display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: '600' }}>
                 <span style={{ color: '#fff' }}>Total Long</span>
@@ -1588,21 +1610,21 @@ const ExposureChartsCard = memo(({
             </div>
           ) : (
             <div>
-              {shorts.slice(0, 8).map((p, i) => {
+              {(shortsExpanded ? shorts : shorts.slice(0, 8)).map((p, i) => {
                 const pctOfNLV = (p.value / nlv) * 100;
                 return (
                   <div key={i} style={{ marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
                       <span style={{ color: '#fff', fontWeight: '500' }}>{p.ticker}</span>
                       <span style={{ color: COLORS.red }}>
-                        ${p.value.toLocaleString(undefined, { maximumFractionDigits: 0 })} 
+                        ${p.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         <span style={{ opacity: 0.7, marginLeft: '4px' }}>({pctOfNLV.toFixed(1)}%)</span>
                       </span>
                     </div>
                     <div style={{ height: '6px', background: 'rgba(231, 76, 60, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ 
-                        width: `${Math.min(100, pctOfNLV)}%`, 
-                        height: '100%', 
+                      <div style={{
+                        width: `${Math.min(100, pctOfNLV)}%`,
+                        height: '100%',
                         background: `linear-gradient(90deg, ${COLORS.red} 0%, rgba(231, 76, 60, 0.6) 100%)`,
                         borderRadius: '3px',
                         transition: 'width 0.3s ease',
@@ -1612,9 +1634,27 @@ const ExposureChartsCard = memo(({
                 );
               })}
               {shorts.length > 8 && (
-                <div style={{ fontSize: '10px', color: '#555', marginTop: '8px' }}>
-                  +{shorts.length - 8} more positions
-                </div>
+                <button
+                  onClick={() => setShortsExpanded(!shortsExpanded)}
+                  style={{
+                    fontSize: '10px',
+                    color: COLORS.cyan,
+                    marginTop: '8px',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '4px 0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  {shortsExpanded ? (
+                    <>▲ Show less</>
+                  ) : (
+                    <>▼ +{shorts.length - 8} more positions</>
+                  )}
+                </button>
               )}
               <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(231, 76, 60, 0.15)', display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: '600' }}>
                 <span style={{ color: '#fff' }}>Total Short</span>

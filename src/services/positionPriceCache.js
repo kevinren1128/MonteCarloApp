@@ -17,7 +17,7 @@ import { fetchYahooHistory } from './yahooFinance';
 // Cache configuration
 const CACHE_KEY = 'monte-carlo-position-prices-v1';
 const CACHE_VERSION = 1;
-const MAX_HISTORY_DAYS = 1260; // ~5 years of trading days (for correlation calc)
+const MAX_HISTORY_DAYS = 756; // ~3 years of trading days (max timeline option in app)
 const MAX_GAP_DAYS = 30; // If gap > 30 days, do full refresh
 const FETCH_DELAY_MS = 100; // Delay between fetches to avoid rate limits
 
@@ -328,9 +328,9 @@ export const fetchPositionPriceData = async (tickers, fetchType, existingCache, 
     // Determine fetch range for this ticker
     let range;
     if (fetchType === 'full') {
-      range = '5y';
+      range = '3y'; // Max timeline option in app is 3 years
     } else if (newTickers.includes(ticker)) {
-      range = '5y'; // Full history for new tickers
+      range = '3y'; // Full history for new tickers
     } else {
       range = incrementalRange; // Incremental for existing
     }
