@@ -22,6 +22,8 @@ import {
   saveOptimizationResults,
   saveSettings,
   isSyncAvailable,
+  saveCorrelationGroups,
+  loadCorrelationGroups,
 } from '../services/portfolioService';
 
 // ============================================
@@ -338,6 +340,45 @@ export function usePortfolioSync(options = {}) {
   }, [isAuthenticated, isAuthAvailable]);
 
   // ============================================
+  // CORRELATION GROUPS
+  // ============================================
+
+  const saveCorrelationGroupsToServer = useCallback(async (groups, groupType = 'sector', source = 'auto') => {
+    if (!isAuthenticated || !isAuthAvailable || !groups) {
+      return { success: false, error: null };
+    }
+
+    try {
+      const { success, error } = await saveCorrelationGroups(groups, groupType, source);
+      if (success) {
+        setSyncState(prev => ({
+          ...prev,
+          status: 'synced',
+          lastSynced: new Date(),
+        }));
+      }
+      return { success, error };
+    } catch (error) {
+      console.error('[usePortfolioSync] Save correlation groups error:', error);
+      return { success: false, error };
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  const loadCorrelationGroupsFromServer = useCallback(async () => {
+    if (!isAuthenticated || !isAuthAvailable) {
+      return { groups: null, tickerToGroup: null, error: null };
+    }
+
+    try {
+      const { groups, tickerToGroup, error } = await loadCorrelationGroups();
+      return { groups, tickerToGroup, error };
+    } catch (error) {
+      console.error('[usePortfolioSync] Load correlation groups error:', error);
+      return { groups: null, tickerToGroup: null, error };
+    }
+  }, [isAuthenticated, isAuthAvailable]);
+
+  // ============================================
   // CLEANUP
   // ============================================
 
@@ -382,6 +423,8 @@ export function usePortfolioSync(options = {}) {
     saveFactorsToServer,
     saveOptimizationToServer,
     saveSettingsToServer,
+    saveCorrelationGroupsToServer,
+    loadCorrelationGroupsFromServer,
   };
 }
 

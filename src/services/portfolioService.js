@@ -139,6 +139,26 @@ export async function fetchAllData() {
 
     const p = portfolios[0];
 
+    // Fetch correlation groups separately (not in main query for simpler RLS)
+    const { data: correlationGroupRows } = await supabase
+      .from('correlation_groups')
+      .select('ticker, group_type, group_name, source')
+      .eq('portfolio_id', p.id);
+
+    // Convert correlation group rows to grouped format
+    const correlationGroups = {};
+    const tickerToGroup = {};
+    if (correlationGroupRows && correlationGroupRows.length > 0) {
+      for (const row of correlationGroupRows) {
+        const { ticker, group_type, group_name, source } = row;
+        if (!correlationGroups[group_name]) {
+          correlationGroups[group_name] = [];
+        }
+        correlationGroups[group_name].push(ticker);
+        tickerToGroup[ticker] = { groupType: group_type, groupName: group_name, source };
+      }
+    }
+
     // Get most recent results (they're ordered by created_at in the query)
     const latestSimulation = p.simulation_results?.sort((a, b) =>
       new Date(b.created_at) - new Date(a.created_at)
@@ -188,6 +208,10 @@ export async function fetchAllData() {
       correlationMethod: p.correlation_overrides?.method || 'shrinkage',
       correlationTickers: p.correlation_overrides?.tickers || [],
 
+      // Correlation groups (for correlation floors)
+      correlationGroups: Object.keys(correlationGroups).length > 0 ? correlationGroups : null,
+      tickerToGroup: Object.keys(tickerToGroup).length > 0 ? tickerToGroup : null,
+
       // Latest simulation results
       simulationResults: latestSimulation ? {
         mean: latestSimulation.mean_return,
@@ -230,6 +254,8 @@ export async function fetchAllData() {
     logger.info('Data loaded successfully', {
       positions: data.positions.length,
       hasCorrelation: !!data.editedCorrelation,
+      hasCorrelationGroups: !!data.correlationGroups,
+      correlationGroupCount: data.correlationGroups ? Object.keys(data.correlationGroups).length : 0,
       hasSimulation: !!data.simulationResults,
       hasFactors: !!data.factorAnalysis,
       hasOptimization: !!data.optimizationResults,
@@ -958,6 +984,208 @@ export async function deleteDividend(dividendId) {
   }
 }
 
+// ============================================
+// CORRELATION GROUPS
+// Per-user ticker → group mappings for correlation floors
+// ============================================
+
+/**
+ * Save correlation groups (batch upsert)
+ * @param {Object} groups - Object mapping group names to arrays of tickers
+ *                          e.g., { "Technology": ["AAPL", "MSFT"], "Financials": ["JPM"] }
+ * @param {string} groupType - Type of grouping: 'sector', 'industry', or 'custom'
+ * @param {string} source - Source of assignment: 'auto' or 'user'
+ */
+export async function saveCorrelationGroups(groups, groupType = 'sector', source = 'auto') {
+  const startTime = performance.now();
+
+  try {
+    const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+    if (idError || !portfolioId) {
+      logger.error('saveCorrelationGroups - no portfolio', { error: idError?.message });
+      return { success: false, error: idError };
+    }
+
+    // Convert groups object to flat records
+    const records = [];
+    for (const [groupName, tickers] of Object.entries(groups)) {
+      if (!Array.isArray(tickers)) continue;
+      for (const ticker of tickers) {
+        if (!ticker) continue;
+        records.push({
+          portfolio_id: portfolioId,
+          ticker: ticker.toUpperCase(),
+          group_type: groupType,
+          group_name: groupName,
+          source: source,
+        });
+      }
+    }
+
+    if (records.length === 0) {
+      logger.info('No correlation groups to save');
+      return { success: true, error: null };
+    }
+
+    // Upsert all records (update if ticker exists, insert if new)
+    const { error } = await supabase
+      .from('correlation_groups')
+      .upsert(records, {
+        onConflict: 'portfolio_id,ticker',
+        ignoreDuplicates: false,
+      });
+
+    if (error) {
+      logger.error('Save correlation groups error', { error: error.message });
+      return { success: false, error };
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Correlation groups saved', { groupCount: Object.keys(groups).length, tickerCount: records.length, duration });
+    logger.metric('save_correlation_groups', duration);
+
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('saveCorrelationGroups exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
+/**
+ * Load correlation groups for current user's portfolio
+ * @returns {Object} { groups: { groupName: [tickers] }, tickerToGroup: { ticker: { groupType, groupName, source } } }
+ */
+export async function loadCorrelationGroups() {
+  const startTime = performance.now();
+
+  try {
+    const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+    if (idError || !portfolioId) {
+      logger.error('loadCorrelationGroups - no portfolio', { error: idError?.message });
+      return { groups: null, tickerToGroup: null, error: idError };
+    }
+
+    const { data, error } = await supabase
+      .from('correlation_groups')
+      .select('ticker, group_type, group_name, source')
+      .eq('portfolio_id', portfolioId);
+
+    if (error) {
+      logger.error('Load correlation groups error', { error: error.message });
+      return { groups: null, tickerToGroup: null, error };
+    }
+
+    if (!data || data.length === 0) {
+      logger.info('No saved correlation groups found');
+      return { groups: {}, tickerToGroup: {}, error: null };
+    }
+
+    // Convert to grouped format (for applyCorrelationFloors)
+    const groups = {};
+    const tickerToGroup = {};
+
+    for (const row of data) {
+      const { ticker, group_type, group_name, source } = row;
+
+      // Build groups object: { groupName: [tickers] }
+      if (!groups[group_name]) {
+        groups[group_name] = [];
+      }
+      groups[group_name].push(ticker);
+
+      // Build tickerToGroup lookup
+      tickerToGroup[ticker] = {
+        groupType: group_type,
+        groupName: group_name,
+        source: source,
+      };
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Correlation groups loaded', { groupCount: Object.keys(groups).length, tickerCount: data.length, duration });
+    logger.metric('load_correlation_groups', duration);
+
+    return { groups, tickerToGroup, error: null };
+  } catch (error) {
+    logger.error('loadCorrelationGroups exception', { error: error.message });
+    return { groups: null, tickerToGroup: null, error };
+  }
+}
+
+/**
+ * Update a single ticker's group assignment (for manual overrides)
+ * @param {string} ticker - The ticker symbol
+ * @param {string} groupType - Type of grouping: 'sector', 'industry', or 'custom'
+ * @param {string} groupName - Name of the group
+ */
+export async function updateTickerGroup(ticker, groupType, groupName) {
+  const startTime = performance.now();
+
+  try {
+    const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+    if (idError || !portfolioId) {
+      logger.error('updateTickerGroup - no portfolio', { error: idError?.message });
+      return { success: false, error: idError };
+    }
+
+    const { error } = await supabase
+      .from('correlation_groups')
+      .upsert({
+        portfolio_id: portfolioId,
+        ticker: ticker.toUpperCase(),
+        group_type: groupType,
+        group_name: groupName,
+        source: 'user',  // Manual override always sets source to 'user'
+      }, {
+        onConflict: 'portfolio_id,ticker',
+        ignoreDuplicates: false,
+      });
+
+    if (error) {
+      logger.error('Update ticker group error', { error: error.message });
+      return { success: false, error };
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Ticker group updated', { ticker, groupType, groupName, duration });
+    logger.metric('update_ticker_group', duration);
+
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('updateTickerGroup exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
+/**
+ * Delete correlation group assignment for a ticker
+ * (Used when removing a position or resetting to auto-detect)
+ */
+export async function deleteTickerGroup(ticker) {
+  try {
+    const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+    if (idError || !portfolioId) {
+      return { success: false, error: idError };
+    }
+
+    const { error } = await supabase
+      .from('correlation_groups')
+      .delete()
+      .eq('portfolio_id', portfolioId)
+      .eq('ticker', ticker.toUpperCase());
+
+    if (error) {
+      logger.error('Delete ticker group error', { error: error.message });
+      return { success: false, error };
+    }
+
+    return { success: true, error: null };
+  } catch (error) {
+    logger.error('deleteTickerGroup exception', { error: error.message });
+    return { success: false, error };
+  }
+}
+
 export default {
   fetchAllData,
   savePositions,
@@ -983,4 +1211,9 @@ export default {
   getDividends,
   getDividendSummary,
   deleteDividend,
+  // Correlation groups
+  saveCorrelationGroups,
+  loadCorrelationGroups,
+  updateTickerGroup,
+  deleteTickerGroup,
 };
