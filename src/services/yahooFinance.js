@@ -13,6 +13,34 @@
  */
 
 // ============================================
+// LOGGING UTILITIES
+// ============================================
+
+const LOG_PREFIX = '[YahooFinance]';
+
+/**
+ * Structured logging for frontend observability
+ * Logs are visible in browser console and can be captured by monitoring tools
+ */
+const logger = {
+  info: (message, data = {}) => {
+    console.log(`${LOG_PREFIX} ${message}`, Object.keys(data).length > 0 ? data : '');
+  },
+  warn: (message, data = {}) => {
+    console.warn(`${LOG_PREFIX} ${message}`, Object.keys(data).length > 0 ? data : '');
+  },
+  error: (message, data = {}) => {
+    console.error(`${LOG_PREFIX} ${message}`, Object.keys(data).length > 0 ? data : '');
+  },
+  metric: (name, value, tags = {}) => {
+    // For future: could send to analytics/monitoring service
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`${LOG_PREFIX} [METRIC] ${name}=${value}`, tags);
+    }
+  },
+};
+
+// ============================================
 // CACHE CONFIGURATION
 // ============================================
 
@@ -32,9 +60,10 @@ const loadCache = () => {
       Object.entries(parsed).forEach(([key, value]) => {
         memoryCache.set(key, value);
       });
+      logger.info('Cache loaded from localStorage', { entries: Object.keys(parsed).length });
     }
   } catch (e) {
-    console.warn('Failed to load Yahoo cache:', e);
+    logger.warn('Failed to load cache', { error: e.message });
   }
 };
 
@@ -110,6 +139,7 @@ const isWorkerConfigured = WORKER_URL &&
 const fetchFromWorker = async (endpoint, params = {}) => {
   if (!isWorkerConfigured) return null;
 
+  const startTime = performance.now();
   try {
     const url = new URL(endpoint, WORKER_URL);
     Object.entries(params).forEach(([key, value]) => {
@@ -127,11 +157,22 @@ const fetchFromWorker = async (endpoint, params = {}) => {
     });
     clearTimeout(timeoutId);
 
-    if (!response.ok) return null;
-    return await response.json();
+    const duration = Math.round(performance.now() - startTime);
+
+    if (!response.ok) {
+      logger.warn('Worker fetch failed', { endpoint, status: response.status, duration });
+      return null;
+    }
+
+    const data = await response.json();
+    logger.metric('worker_fetch_ms', duration, { endpoint });
+    return data;
   } catch (error) {
-    if (error.name !== 'AbortError') {
-      console.warn(`[YahooFinance] Worker fetch failed for ${endpoint}:`, error.message);
+    const duration = Math.round(performance.now() - startTime);
+    if (error.name === 'AbortError') {
+      logger.warn('Worker fetch timeout', { endpoint, duration });
+    } else {
+      logger.warn('Worker fetch error', { endpoint, error: error.message, duration });
     }
     return null;
   }
@@ -259,18 +300,22 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  * @returns {Promise<Object|null>} Parsed JSON response or null on failure
  */
 export const fetchYahooData = async (url, { timeout = 12000, retries = 2, useCache = true } = {}) => {
+  const startTime = performance.now();
   const cacheKey = url;
+  const symbol = url.match(/chart\/([^?]+)/)?.[1] || url.match(/quoteSummary\/([^?]+)/)?.[1] || 'unknown';
 
   // Check cache first
   if (useCache) {
     const cached = getFromCache(cacheKey);
     if (cached?.isFresh) {
+      logger.info('Cache hit (fresh)', { symbol, ageMin: Math.round(cached.age / 60000) });
       return cached.data;
     }
   }
 
   const sortedProxies = getSortedProxies();
   let lastError = null;
+  let attemptsMade = 0;
 
   // Try each proxy with retries
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -280,6 +325,7 @@ export const fetchYahooData = async (url, { timeout = 12000, retries = 2, useCac
     }
 
     for (const proxy of sortedProxies) {
+      attemptsMade++;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -297,6 +343,9 @@ export const fetchYahooData = async (url, { timeout = 12000, retries = 2, useCac
           const data = await proxy.parseResponse(response);
           if (data && !data.error) {
             recordProxyResult(proxy.name, true);
+            const duration = Math.round(performance.now() - startTime);
+            logger.info('Fetch success via proxy', { symbol, proxy: proxy.name, duration, attemptsMade });
+            logger.metric('proxy_fetch_ms', duration, { proxy: proxy.name });
             // Save to cache
             if (useCache) {
               saveToCache(cacheKey, data);
@@ -317,14 +366,14 @@ export const fetchYahooData = async (url, { timeout = 12000, retries = 2, useCac
   if (useCache) {
     const cached = getFromCache(cacheKey);
     if (cached && !cached.isExpired) {
-      console.warn(`Using stale cache for ${url.slice(0, 60)}... (${Math.round(cached.age / 60000)}min old)`);
+      logger.warn('Using stale cache', { symbol, ageMin: Math.round(cached.age / 60000) });
       return cached.data;
     }
   }
 
   // Log failure
-  const symbol = url.match(/chart\/([^?]+)/)?.[1] || url.match(/quoteSummary\/([^?]+)/)?.[1] || 'unknown';
-  console.warn(`Yahoo Finance fetch failed for ${symbol} after ${retries + 1} attempts`);
+  const duration = Math.round(performance.now() - startTime);
+  logger.error('Fetch failed after all retries', { symbol, attemptsMade, duration, lastError: lastError?.message });
   return null;
 };
 
@@ -334,11 +383,14 @@ export const fetchYahooData = async (url, { timeout = 12000, retries = 2, useCac
  * @returns {Promise<{price: number, name: string, type: string, currency: string}|null>}
  */
 export const fetchYahooQuote = async (symbol) => {
+  const startTime = performance.now();
+
   // Try Cloudflare Worker first (shared cache - 15 min TTL)
   if (isWorkerConfigured) {
     const workerData = await fetchFromWorker('/api/quotes', { symbols: symbol });
     if (workerData?.[symbol]?.price) {
-      console.log(`[YahooFinance] ✅ Got ${symbol} quote from Worker cache`);
+      const duration = Math.round(performance.now() - startTime);
+      logger.info('Quote from Worker', { symbol, price: workerData[symbol].price, duration });
       return workerData[symbol];
     }
   }
@@ -359,6 +411,8 @@ export const fetchYahooQuote = async (symbol) => {
                           meta?.previousClose;
 
       if (latestPrice) {
+        const duration = Math.round(performance.now() - startTime);
+        logger.info('Quote from proxy', { symbol, price: latestPrice, duration });
         return {
           price: latestPrice,
           name: meta?.shortName || meta?.longName || symbol,
@@ -367,9 +421,10 @@ export const fetchYahooQuote = async (symbol) => {
         };
       }
     }
+    logger.warn('Quote fetch returned no data', { symbol });
     return null;
   } catch (error) {
-    console.warn(`Failed to fetch quote for ${symbol}:`, error);
+    logger.error('Quote fetch error', { symbol, error: error.message });
     return null;
   }
 };
@@ -382,6 +437,8 @@ export const fetchYahooQuote = async (symbol) => {
  * @returns {Promise<Array<{date: Date, close: number}>|null>}
  */
 export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') => {
+  const startTime = performance.now();
+
   // Try Cloudflare Worker first (shared cache)
   if (isWorkerConfigured) {
     const workerData = await fetchFromWorker('/api/prices', { symbols: symbol, range, interval });
@@ -399,7 +456,8 @@ export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') =
         }
       }
       if (prices.length > 0) {
-        console.log(`[YahooFinance] ✅ Got ${symbol} history from Worker cache`);
+        const duration = Math.round(performance.now() - startTime);
+        logger.info('History from Worker', { symbol, dataPoints: prices.length, range, duration });
         return prices;
       }
     }
@@ -425,11 +483,14 @@ export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') =
           });
         }
       }
+      const duration = Math.round(performance.now() - startTime);
+      logger.info('History from proxy', { symbol, dataPoints: prices.length, range, duration });
       return prices;
     }
+    logger.warn('History fetch returned no data', { symbol, range });
     return null;
   } catch (error) {
-    console.warn(`Failed to fetch history for ${symbol}:`, error);
+    logger.error('History fetch error', { symbol, range, error: error.message });
     return null;
   }
 };
@@ -478,11 +539,14 @@ export const fetchYahooHistoryRaw = async (symbol, range = '1y', interval = '1d'
  * @returns {Promise<{sector: string, industry: string, longName: string, quoteType: string}|null>}
  */
 export const fetchYahooProfile = async (symbol) => {
+  const startTime = performance.now();
+
   // Try Cloudflare Worker first (shared cache - 7 day TTL)
   if (isWorkerConfigured) {
     const workerData = await fetchFromWorker('/api/profile', { symbols: symbol });
     if (workerData?.[symbol]) {
-      console.log(`[YahooFinance] ✅ Got ${symbol} profile from Worker cache`);
+      const duration = Math.round(performance.now() - startTime);
+      logger.info('Profile from Worker', { symbol, sector: workerData[symbol].sector, duration });
       return workerData[symbol];
     }
   }
@@ -497,6 +561,8 @@ export const fetchYahooProfile = async (symbol) => {
       const profile = result.assetProfile || result.summaryProfile || {};
       const quoteType = result.quoteType || {};
 
+      const duration = Math.round(performance.now() - startTime);
+      logger.info('Profile from proxy', { symbol, sector: profile.sector, duration });
       return {
         sector: profile.sector || null,
         industry: profile.industry || null,
@@ -505,9 +571,10 @@ export const fetchYahooProfile = async (symbol) => {
         shortName: quoteType.shortName || symbol,
       };
     }
+    logger.warn('Profile fetch returned no data', { symbol });
     return null;
   } catch (error) {
-    console.warn(`Failed to fetch profile for ${symbol}:`, error);
+    logger.error('Profile fetch error', { symbol, error: error.message });
     return null;
   }
 };
@@ -521,13 +588,15 @@ export const fetchYahooProfile = async (symbol) => {
 export const fetchExchangeRate = async (fromCurrency, toCurrency = 'USD') => {
   if (fromCurrency === toCurrency) return 1;
 
+  const startTime = performance.now();
   const pair = `${fromCurrency}${toCurrency}`;
 
   // Try Cloudflare Worker first (shared cache - 24 hour TTL)
   if (isWorkerConfigured) {
     const workerData = await fetchFromWorker('/api/fx', { pairs: pair });
     if (workerData?.[pair]?.rate) {
-      console.log(`[YahooFinance] ✅ Got ${pair} rate from Worker cache`);
+      const duration = Math.round(performance.now() - startTime);
+      logger.info('FX rate from Worker', { pair, rate: workerData[pair].rate, duration });
       return workerData[pair].rate;
     }
   }
@@ -547,18 +616,28 @@ export const fetchExchangeRate = async (fromCurrency, toCurrency = 'USD') => {
     if (data?.chart?.result?.[0]) {
       const meta = data.chart.result[0].meta;
       const rate = meta?.regularMarketPrice || meta?.previousClose;
-      if (rate) return rate;
+      if (rate) {
+        const duration = Math.round(performance.now() - startTime);
+        logger.info('FX rate from proxy', { pair, rate, duration });
+        return rate;
+      }
     }
 
     if (reverseData?.chart?.result?.[0]) {
       const meta = reverseData.chart.result[0].meta;
       const rate = meta?.regularMarketPrice || meta?.previousClose;
-      if (rate) return 1 / rate;
+      if (rate) {
+        const invRate = 1 / rate;
+        const duration = Math.round(performance.now() - startTime);
+        logger.info('FX rate from proxy (inverted)', { pair, rate: invRate, duration });
+        return invRate;
+      }
     }
 
+    logger.warn('FX rate fetch returned no data', { pair });
     return null;
   } catch (error) {
-    console.warn(`Failed to fetch exchange rate ${fromCurrency}/${toCurrency}:`, error);
+    logger.error('FX rate fetch error', { pair, error: error.message });
     return null;
   }
 };

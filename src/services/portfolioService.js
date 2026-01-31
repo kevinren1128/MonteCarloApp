@@ -17,6 +17,32 @@
 import { supabase, isAuthAvailable, getUser } from './authService';
 
 // ============================================
+// LOGGING UTILITIES
+// ============================================
+
+const LOG_PREFIX = '[PortfolioService]';
+
+/**
+ * Structured logging for frontend observability
+ */
+const logger = {
+  info: (message, data = {}) => {
+    console.log(`${LOG_PREFIX} ${message}`, Object.keys(data).length > 0 ? data : '');
+  },
+  warn: (message, data = {}) => {
+    console.warn(`${LOG_PREFIX} ${message}`, Object.keys(data).length > 0 ? data : '');
+  },
+  error: (message, data = {}) => {
+    console.error(`${LOG_PREFIX} ${message}`, Object.keys(data).length > 0 ? data : '');
+  },
+  metric: (name, value, tags = {}) => {
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`${LOG_PREFIX} [METRIC] ${name}=${value}ms`, tags);
+    }
+  },
+};
+
+// ============================================
 // HELPER: Get or Create Portfolio
 // ============================================
 
@@ -68,15 +94,21 @@ async function getOrCreatePortfolioId() {
  * Call this on login to restore full state
  */
 export async function fetchAllData() {
+  const startTime = performance.now();
+
   if (!supabase || !isAuthAvailable()) {
+    logger.warn('Fetch skipped - auth not available');
     return { data: null, error: null };
   }
 
   try {
     const { data: { user }, error: userError } = await getUser();
     if (userError || !user) {
+      logger.warn('Fetch skipped - no user', { error: userError?.message });
       return { data: null, error: userError };
     }
+
+    logger.info('Fetching all data...', { userId: user.id.slice(0, 8) });
 
     // Fetch portfolio with all related data
     const { data: portfolios, error } = await supabase
@@ -95,12 +127,13 @@ export async function fetchAllData() {
       .limit(1);
 
     if (error) {
-      console.error('[PortfolioService] Fetch error:', error);
+      logger.error('Fetch error', { error: error.message });
       return { data: null, error };
     }
 
     if (!portfolios || portfolios.length === 0) {
-      console.log('[PortfolioService] No portfolio found for user');
+      const duration = Math.round(performance.now() - startTime);
+      logger.info('No portfolio found', { duration });
       return { data: null, error: null };
     }
 
@@ -189,17 +222,21 @@ export async function fetchAllData() {
       } : null,
     };
 
-    console.log('[PortfolioService] Loaded data:', {
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Data loaded successfully', {
       positions: data.positions.length,
       hasCorrelation: !!data.editedCorrelation,
       hasSimulation: !!data.simulationResults,
       hasFactors: !!data.factorAnalysis,
       hasOptimization: !!data.optimizationResults,
+      duration,
     });
+    logger.metric('fetch_all_data', duration);
 
     return { data, error: null };
   } catch (error) {
-    console.error('[PortfolioService] fetchAllData error:', error);
+    const duration = Math.round(performance.now() - startTime);
+    logger.error('fetchAllData exception', { error: error.message, duration });
     return { data: null, error };
   }
 }
@@ -212,15 +249,16 @@ export async function fetchAllData() {
  * Save positions with distribution parameters
  */
 export async function savePositions(positions, cashBalance = 0) {
-  console.log('[PortfolioService] savePositions called with', positions?.length || 0, 'positions');
+  const startTime = performance.now();
+  const positionCount = positions?.length || 0;
+
+  logger.info('Saving positions', { count: positionCount, cashBalance });
 
   const { portfolioId, userId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
-    console.error('[PortfolioService] Failed to get/create portfolio:', idError);
+    logger.error('Failed to get/create portfolio', { error: idError?.message });
     return { success: false, error: idError };
   }
-
-  console.log('[PortfolioService] Using portfolioId:', portfolioId, 'userId:', userId);
 
   try {
     // Update cash balance
@@ -230,11 +268,10 @@ export async function savePositions(positions, cashBalance = 0) {
       .eq('id', portfolioId);
 
     if (cashError) {
-      console.error('[PortfolioService] Cash balance update error:', cashError);
+      logger.warn('Cash balance update error', { error: cashError.message });
     }
 
     // Delete ALL existing positions first (wait for it to complete)
-    console.log('[PortfolioService] Deleting existing positions...');
     const { data: deletedData, error: deleteError } = await supabase
       .from('positions')
       .delete()
@@ -242,10 +279,10 @@ export async function savePositions(positions, cashBalance = 0) {
       .select();
 
     if (deleteError) {
-      console.error('[PortfolioService] Delete positions error:', deleteError);
+      logger.warn('Delete positions error', { error: deleteError.message });
       // Continue anyway - might be empty
     } else {
-      console.log('[PortfolioService] Deleted', deletedData?.length || 0, 'existing positions');
+      logger.info('Deleted existing positions', { count: deletedData?.length || 0 });
     }
 
     // Small delay to ensure delete propagates
@@ -267,25 +304,26 @@ export async function savePositions(positions, cashBalance = 0) {
         p95: p.p95,
       }));
 
-      console.log('[PortfolioService] Inserting positions:', positionsToInsert.map(p => p.symbol));
-
       const { data: insertedData, error: insertError } = await supabase
         .from('positions')
         .insert(positionsToInsert)
         .select();
 
       if (insertError) {
-        console.error('[PortfolioService] Insert positions error:', insertError);
+        logger.error('Insert positions error', { error: insertError.message });
         return { success: false, error: insertError };
       }
 
-      console.log('[PortfolioService] Successfully inserted:', insertedData?.length || 0, 'positions');
+      logger.info('Inserted positions', { count: insertedData?.length || 0 });
     }
 
-    console.log('[PortfolioService] ✅ Saved', positions?.length || 0, 'positions successfully');
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Positions saved successfully', { count: positionCount, duration });
+    logger.metric('save_positions', duration, { count: positionCount });
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] savePositions exception:', error);
+    const duration = Math.round(performance.now() - startTime);
+    logger.error('savePositions exception', { error: error.message, duration });
     return { success: false, error };
   }
 }
@@ -298,8 +336,11 @@ export async function savePositions(positions, cashBalance = 0) {
  * Save edited correlation matrix
  */
 export async function saveCorrelation(correlationMatrix, method, tickers) {
+  const startTime = performance.now();
+
   const { portfolioId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
+    logger.error('saveCorrelation - no portfolio', { error: idError?.message });
     return { success: false, error: idError };
   }
 
@@ -314,14 +355,16 @@ export async function saveCorrelation(correlationMatrix, method, tickers) {
       }, { onConflict: 'portfolio_id' });
 
     if (error) {
-      console.error('[PortfolioService] Save correlation error:', error);
+      logger.error('Save correlation error', { error: error.message });
       return { success: false, error };
     }
 
-    console.log('[PortfolioService] Saved correlation matrix');
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Correlation matrix saved', { method, tickerCount: tickers?.length, duration });
+    logger.metric('save_correlation', duration);
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] saveCorrelation error:', error);
+    logger.error('saveCorrelation exception', { error: error.message });
     return { success: false, error };
   }
 }
@@ -334,17 +377,22 @@ export async function saveCorrelation(correlationMatrix, method, tickers) {
  * Save simulation results
  */
 export async function saveSimulationResults(results) {
+  const startTime = performance.now();
+
   const { portfolioId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
+    logger.error('saveSimulationResults - no portfolio', { error: idError?.message });
     return { success: false, error: idError };
   }
 
   try {
+    const numPaths = results.numPaths || results.paths?.length || 0;
+
     const { error } = await supabase
       .from('simulation_results')
       .insert({
         portfolio_id: portfolioId,
-        num_paths: results.numPaths || results.paths?.length || 0,
+        num_paths: numPaths,
         method: results.method || 'quasi-monte-carlo',
         mean_return: results.mean,
         median_return: results.median,
@@ -359,14 +407,16 @@ export async function saveSimulationResults(results) {
       });
 
     if (error) {
-      console.error('[PortfolioService] Save simulation error:', error);
+      logger.error('Save simulation error', { error: error.message });
       return { success: false, error };
     }
 
-    console.log('[PortfolioService] Saved simulation results');
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Simulation results saved', { numPaths, method: results.method, duration });
+    logger.metric('save_simulation', duration);
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] saveSimulationResults error:', error);
+    logger.error('saveSimulationResults exception', { error: error.message });
     return { success: false, error };
   }
 }
@@ -379,8 +429,11 @@ export async function saveSimulationResults(results) {
  * Save factor analysis results
  */
 export async function saveFactorResults(results) {
+  const startTime = performance.now();
+
   const { portfolioId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
+    logger.error('saveFactorResults - no portfolio', { error: idError?.message });
     return { success: false, error: idError };
   }
 
@@ -397,14 +450,16 @@ export async function saveFactorResults(results) {
       });
 
     if (error) {
-      console.error('[PortfolioService] Save factor error:', error);
+      logger.error('Save factor error', { error: error.message });
       return { success: false, error };
     }
 
-    console.log('[PortfolioService] Saved factor results');
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Factor results saved', { rSquared: results.rSquared, duration });
+    logger.metric('save_factors', duration);
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] saveFactorResults error:', error);
+    logger.error('saveFactorResults exception', { error: error.message });
     return { success: false, error };
   }
 }
@@ -417,8 +472,11 @@ export async function saveFactorResults(results) {
  * Save optimization results
  */
 export async function saveOptimizationResults(results) {
+  const startTime = performance.now();
+
   const { portfolioId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
+    logger.error('saveOptimizationResults - no portfolio', { error: idError?.message });
     return { success: false, error: idError };
   }
 
@@ -439,14 +497,16 @@ export async function saveOptimizationResults(results) {
       });
 
     if (error) {
-      console.error('[PortfolioService] Save optimization error:', error);
+      logger.error('Save optimization error', { error: error.message });
       return { success: false, error };
     }
 
-    console.log('[PortfolioService] Saved optimization results');
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Optimization results saved', { objective: results.objective, sharpe: results.sharpe, duration });
+    logger.metric('save_optimization', duration);
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] saveOptimizationResults error:', error);
+    logger.error('saveOptimizationResults exception', { error: error.message });
     return { success: false, error };
   }
 }
@@ -459,8 +519,11 @@ export async function saveOptimizationResults(results) {
  * Save user settings (UI preferences, defaults, etc.)
  */
 export async function saveSettings(settings) {
+  const startTime = performance.now();
+
   const { portfolioId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
+    logger.error('saveSettings - no portfolio', { error: idError?.message });
     return { success: false, error: idError };
   }
 
@@ -473,14 +536,16 @@ export async function saveSettings(settings) {
       }, { onConflict: 'portfolio_id' });
 
     if (error) {
-      console.error('[PortfolioService] Save settings error:', error);
+      logger.error('Save settings error', { error: error.message });
       return { success: false, error };
     }
 
-    console.log('[PortfolioService] Saved settings');
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Settings saved', { keyCount: Object.keys(settings || {}).length, duration });
+    logger.metric('save_settings', duration);
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] saveSettings error:', error);
+    logger.error('saveSettings exception', { error: error.message });
     return { success: false, error };
   }
 }
@@ -493,8 +558,11 @@ export async function saveSettings(settings) {
  * Delete portfolio and all associated data
  */
 export async function deletePortfolio() {
+  const startTime = performance.now();
+
   const { portfolioId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
+    logger.error('deletePortfolio - no portfolio', { error: idError?.message });
     return { success: false, error: idError };
   }
 
@@ -505,14 +573,16 @@ export async function deletePortfolio() {
       .eq('id', portfolioId);
 
     if (error) {
-      console.error('[PortfolioService] Delete error:', error);
+      logger.error('Delete error', { error: error.message });
       return { success: false, error };
     }
 
-    console.log('[PortfolioService] Deleted portfolio');
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('Portfolio deleted', { portfolioId, duration });
+    logger.metric('delete_portfolio', duration);
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] deletePortfolio error:', error);
+    logger.error('deletePortfolio exception', { error: error.message });
     return { success: false, error };
   }
 }
