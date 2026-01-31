@@ -434,7 +434,7 @@ export const fetchYahooQuote = async (symbol) => {
  * @param {string} symbol - Ticker symbol
  * @param {string} range - Time range ('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', 'max')
  * @param {string} interval - Data interval ('1d', '1wk', '1mo')
- * @returns {Promise<Array<{date: Date, close: number}>|null>}
+ * @returns {Promise<{prices: Array<{date: Date, close: number}>, currency: string, regularMarketPrice: number}|null>}
  */
 export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') => {
   const startTime = performance.now();
@@ -458,7 +458,11 @@ export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') =
       if (prices.length > 0) {
         const duration = Math.round(performance.now() - startTime);
         logger.info('History from Worker', { symbol, dataPoints: prices.length, range, duration });
-        return prices;
+        return {
+          prices,
+          currency: d.currency || 'USD',
+          regularMarketPrice: d.meta?.regularMarketPrice || closes[closes.length - 1],
+        };
       }
     }
   }
@@ -470,6 +474,7 @@ export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') =
 
     if (data?.chart?.result?.[0]) {
       const result = data.chart.result[0];
+      const meta = result.meta || {};
       const timestamps = result.timestamp || [];
       const closes = result.indicators?.adjclose?.[0]?.adjclose ||
                      result.indicators?.quote?.[0]?.close || [];
@@ -485,7 +490,11 @@ export const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') =
       }
       const duration = Math.round(performance.now() - startTime);
       logger.info('History from proxy', { symbol, dataPoints: prices.length, range, duration });
-      return prices;
+      return {
+        prices,
+        currency: meta.currency || 'USD',
+        regularMarketPrice: meta.regularMarketPrice || closes[closes.length - 1],
+      };
     }
     logger.warn('History fetch returned no data', { symbol, range });
     return null;

@@ -116,12 +116,13 @@ export async function fetchPrices(symbols, range = '1y', interval = '1d') {
   const results = {};
 
   await Promise.all(symbols.map(async (symbol) => {
-    const history = await fetchYahooHistory(symbol, range, interval);
-    if (history) {
+    const historyResult = await fetchYahooHistory(symbol, range, interval);
+    if (historyResult?.prices) {
       results[symbol] = {
-        prices: history.map(p => p.close),
-        timestamps: history.map(p => p.date.getTime()),
+        prices: historyResult.prices.map(p => p.close),
+        timestamps: historyResult.prices.map(p => p.date.getTime()),
         symbol,
+        currency: historyResult.currency,
       };
     }
   }));

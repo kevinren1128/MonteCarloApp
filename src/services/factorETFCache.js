@@ -264,8 +264,8 @@ export const fetchFactorETFData = async (fetchType, existingCache, onProgress) =
   const processBatch = async (batch) => {
     const results = await Promise.allSettled(
       batch.map(async ({ etf, range: fetchRange }) => {
-        const history = await fetchYahooHistory(etf, fetchRange, '1d');
-        return { etf, history };
+        const historyResult = await fetchYahooHistory(etf, fetchRange, '1d');
+        return { etf, history: historyResult?.prices || null };
       })
     );
 

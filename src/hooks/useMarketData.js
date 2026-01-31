@@ -138,10 +138,10 @@ export function useMarketData() {
         if (!ticker) continue;
 
         try {
-          // fetchYahooHistory returns array of {date, close} directly
-          const prices = await fetchYahooHistory(ticker, '5y', '1d');
+          // fetchYahooHistory returns {prices, currency, regularMarketPrice}
+          const historyResult = await fetchYahooHistory(ticker, '5y', '1d');
           completedCount++;
-          const daysCount = prices?.length || 0;
+          const daysCount = historyResult?.prices?.length || 0;
           setUnifiedFetchProgress({
             current: completedCount,
             total: allTickers.length,
@@ -150,9 +150,9 @@ export function useMarketData() {
           });
           historyFetchResults.push({
             ticker,
-            data: prices || null,
-            currency: 'USD', // Currency info not available from this API
-            regularMarketPrice: prices?.[prices.length - 1]?.close,
+            data: historyResult?.prices || null,
+            currency: historyResult?.currency || 'USD',
+            regularMarketPrice: historyResult?.regularMarketPrice,
             cached: false
           });
         } catch (err) {

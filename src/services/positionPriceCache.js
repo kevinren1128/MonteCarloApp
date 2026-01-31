@@ -339,8 +339,8 @@ export const fetchPositionPriceData = async (tickers, fetchType, existingCache, 
   const processBatch = async (batch) => {
     const results = await Promise.allSettled(
       batch.map(async ({ ticker, range, isNew }) => {
-        const history = await fetchYahooHistory(ticker, range, '1d');
-        return { ticker, history, isNew };
+        const historyResult = await fetchYahooHistory(ticker, range, '1d');
+        return { ticker, history: historyResult?.prices || null, isNew };
       })
     );
 
