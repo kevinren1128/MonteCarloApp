@@ -3,13 +3,23 @@
  *
  * @module components/common/Sidebar
  * @description Collapsible sidebar with vertical navigation tabs.
+ * Width is adjustable via click-and-drag on the right edge.
  */
 
-import React, { memo } from 'react';
+import React, { memo, useState, useEffect, useCallback, useRef } from 'react';
 import { AnimatedPortfolioValue } from './AnimatedCounter';
 
 // Monospace font stack
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
+
+// Width constraints
+const MIN_COLLAPSED_WIDTH = 56;
+const MIN_EXPANDED_WIDTH = 160;
+const MAX_EXPANDED_WIDTH = 400;
+const DEFAULT_EXPANDED_WIDTH = 220;
+
+// LocalStorage key for persisting width
+const WIDTH_STORAGE_KEY = 'sidebar-expanded-width';
 
 // Tab configuration with icons
 const TABS = [
@@ -45,7 +55,72 @@ const Sidebar = memo(({
   UserMenu,
   syncState,
 }) => {
-  const sidebarWidth = isExpanded ? 220 : 56;
+  // Load saved width from localStorage
+  const [expandedWidth, setExpandedWidth] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(WIDTH_STORAGE_KEY);
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= MIN_EXPANDED_WIDTH && parsed <= MAX_EXPANDED_WIDTH) {
+          return parsed;
+        }
+      }
+    }
+    return DEFAULT_EXPANDED_WIDTH;
+  });
+
+  // Drag state
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
+
+  // Save width to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem(WIDTH_STORAGE_KEY, String(expandedWidth));
+  }, [expandedWidth]);
+
+  // Handle drag start
+  const handleDragStart = useCallback((e) => {
+    if (!isExpanded) return; // Only allow resize when expanded
+    e.preventDefault();
+    setIsDragging(true);
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = expandedWidth;
+  }, [isExpanded, expandedWidth]);
+
+  // Handle drag move
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e) => {
+      const delta = e.clientX - dragStartX.current;
+      const newWidth = Math.min(
+        MAX_EXPANDED_WIDTH,
+        Math.max(MIN_EXPANDED_WIDTH, dragStartWidth.current + delta)
+      );
+      setExpandedWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    // Change cursor while dragging
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isDragging]);
+
+  const sidebarWidth = isExpanded ? expandedWidth : MIN_COLLAPSED_WIDTH;
 
   const styles = {
     sidebar: {
@@ -56,7 +131,8 @@ const Sidebar = memo(({
       borderRight: '1px solid rgba(42, 42, 74, 0.6)',
       display: 'flex',
       flexDirection: 'column',
-      transition: 'width 0.25s ease, min-width 0.25s ease',
+      // Only animate during toggle, not during drag
+      transition: isDragging ? 'none' : 'width 0.25s ease, min-width 0.25s ease',
       position: 'relative',
       zIndex: 100,
       fontFamily: FONT_FAMILY,
@@ -223,8 +299,40 @@ const Sidebar = memo(({
     }).format(value);
   };
 
+  // Resize handle styles
+  const resizeHandleStyle = {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: '6px',
+    height: '100%',
+    cursor: isExpanded ? 'col-resize' : 'default',
+    background: isDragging ? 'rgba(0, 212, 255, 0.3)' : 'transparent',
+    transition: isDragging ? 'none' : 'background 0.15s ease',
+    zIndex: 101,
+  };
+
   return (
     <div style={styles.sidebar}>
+      {/* Resize Handle */}
+      {isExpanded && (
+        <div
+          style={resizeHandleStyle}
+          onMouseDown={handleDragStart}
+          onDoubleClick={() => setExpandedWidth(DEFAULT_EXPANDED_WIDTH)}
+          onMouseEnter={(e) => {
+            if (!isDragging) {
+              e.currentTarget.style.background = 'rgba(0, 212, 255, 0.15)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isDragging) {
+              e.currentTarget.style.background = 'transparent';
+            }
+          }}
+          title="Drag to resize (double-click to reset)"
+        />
+      )}
       {/* Header with logo and portfolio value */}
       <div style={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>

@@ -6,8 +6,12 @@ import { GoogleSignIn } from './GoogleSignIn';
  * User Menu Component
  * Shows user avatar and dropdown with account options when logged in,
  * or a sign-in button when logged out.
+ *
+ * @param {Object} props
+ * @param {Object} props.syncState - Sync status object
+ * @param {boolean} props.inlineSync - Show sync icon inline beside avatar (default: true)
  */
-export function UserMenu({ syncState = { status: 'idle' } }) {
+export function UserMenu({ syncState = { status: 'idle' }, inlineSync = true }) {
   const { state, logout } = useAuth();
   const { isAuthenticated, isAvailable, displayInfo, isLoading } = state;
   const [isOpen, setIsOpen] = useState(false);
@@ -111,30 +115,39 @@ export function UserMenu({ syncState = { status: 'idle' } }) {
 
   return (
     <div style={styles.container} ref={menuRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        style={styles.avatarButton}
-        aria-label="User menu"
-        aria-expanded={isOpen}
-      >
-        {displayInfo.avatar ? (
-          <img
-            src={displayInfo.avatar}
-            alt={displayInfo.name}
-            style={styles.avatar}
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <div style={styles.avatarFallback}>
-            {displayInfo.name.charAt(0).toUpperCase()}
-          </div>
-        )}
-        {(syncStatus === 'syncing' || syncStatus === 'synced') && (
-          <span style={styles.syncIndicator}>
+      <div style={styles.avatarRow}>
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          style={styles.avatarButton}
+          aria-label="User menu"
+          aria-expanded={isOpen}
+        >
+          {displayInfo.avatar ? (
+            <img
+              src={displayInfo.avatar}
+              alt={displayInfo.name}
+              style={styles.avatar}
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div style={styles.avatarFallback}>
+              {displayInfo.name.charAt(0).toUpperCase()}
+            </div>
+          )}
+          {/* Overlay sync indicator (legacy mode) */}
+          {!inlineSync && (syncStatus === 'syncing' || syncStatus === 'synced') && (
+            <span style={styles.syncIndicatorOverlay}>
+              {getSyncStatusIcon()}
+            </span>
+          )}
+        </button>
+        {/* Inline sync indicator (new default) */}
+        {inlineSync && (syncStatus === 'syncing' || syncStatus === 'synced') && (
+          <span style={styles.syncIndicatorInline}>
             {getSyncStatusIcon()}
           </span>
         )}
-      </button>
+      </div>
 
       {isOpen && (
         <div style={styles.dropdown}>
@@ -191,6 +204,11 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
   },
+  avatarRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
   loadingDot: {
     width: '32px',
     height: '32px',
@@ -228,7 +246,7 @@ const styles = {
     fontSize: '14px',
     fontWeight: '500',
   },
-  syncIndicator: {
+  syncIndicatorOverlay: {
     position: 'absolute',
     bottom: '0',
     right: '0',
@@ -240,6 +258,16 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+  },
+  syncIndicatorInline: {
+    width: '20px',
+    height: '20px',
+    borderRadius: '50%',
+    background: 'rgba(255, 255, 255, 0.1)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   dropdown: {
     position: 'absolute',
