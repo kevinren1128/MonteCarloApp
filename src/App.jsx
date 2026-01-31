@@ -2089,14 +2089,34 @@ function MonteCarloSimulator() {
     });
     
     console.log(`📊 History fetch complete in ${(performance.now() - startTime).toFixed(0)}ms`);
-    
+
     // PHASE 1.5: Fetch exchange rates for non-USD currencies
-    const uniqueCurrencies = [...new Set(
-      historyFetchResults
-        .filter(r => r.currency && r.currency !== 'USD')
-        .map(r => r.currency)
-    )];
-    
+    // Include currencies from BOTH newly fetched AND cached tickers
+    const allCurrencies = new Set();
+
+    // From newly fetched tickers
+    historyFetchResults.forEach(r => {
+      if (r.currency && r.currency !== 'USD') {
+        allCurrencies.add(r.currency);
+      }
+    });
+
+    // From cached tickers (check existing data or historyResults)
+    Object.values(historyResults).forEach(r => {
+      if (r.currency && r.currency !== 'USD') {
+        allCurrencies.add(r.currency);
+      }
+    });
+
+    // Also check in-memory cache for currencies
+    Object.values(newData).forEach(d => {
+      if (d.currency && d.currency !== 'USD') {
+        allCurrencies.add(d.currency);
+      }
+    });
+
+    const uniqueCurrencies = [...allCurrencies];
+
     const exchangeRates = { USD: 1 };
     if (uniqueCurrencies.length > 0) {
       console.log(`💱 Fetching exchange rates in parallel for: ${uniqueCurrencies.join(', ')}`);
@@ -2119,7 +2139,66 @@ function MonteCarloSimulator() {
         }
       });
     }
-    
+
+    // PHASE 1.6: EARLY PRICE UPDATE - Update positions immediately after FX rates
+    // This gives users immediate feedback before heavy processing begins
+    setUnifiedFetchProgress({
+      current: allTickers.length,
+      total: allTickers.length,
+      message: 'Updating prices...'
+    });
+
+    // Build quick price map from history results (before full processing)
+    const quickPriceUpdates = {};
+    for (const ticker of tickers) { // Only position tickers, not factor ETFs
+      const histResult = historyResults[ticker];
+      if (histResult?.data?.length > 0) {
+        const lastPrice = histResult.data[histResult.data.length - 1];
+        const closePrice = typeof lastPrice === 'number' ? lastPrice : lastPrice?.close;
+        const currency = histResult.currency || 'USD';
+        const rate = exchangeRates[currency] || 1;
+        quickPriceUpdates[ticker] = {
+          currentPrice: closePrice * rate,
+          domesticPrice: closePrice,
+          currency,
+          exchangeRate: rate,
+        };
+      } else if (newData[ticker]?.currentPrice) {
+        // Use cached data if available
+        const cached = newData[ticker];
+        const currency = cached.currency || 'USD';
+        const rate = exchangeRates[currency] || cached.exchangeRate || 1;
+        // Recalculate USD price with fresh FX rate
+        const domesticPrice = cached.domesticPrice || cached.currentPrice;
+        quickPriceUpdates[ticker] = {
+          currentPrice: domesticPrice * rate,
+          domesticPrice,
+          currency,
+          exchangeRate: rate,
+        };
+      }
+    }
+
+    // Update positions with prices immediately
+    if (Object.keys(quickPriceUpdates).length > 0) {
+      setPositions(prevPositions => {
+        return prevPositions.map(pos => {
+          if (!pos.ticker) return pos;
+          const update = quickPriceUpdates[pos.ticker.toUpperCase()];
+          if (!update) return pos;
+
+          console.log(`💱 Early update ${pos.ticker}: $${pos.price?.toFixed(2)} → $${update.currentPrice?.toFixed(2)} (${update.currency} ${update.domesticPrice?.toFixed(2)} @${update.exchangeRate?.toFixed(4)})`);
+          return {
+            ...pos,
+            price: update.currentPrice,
+            currency: update.currency,
+            domesticPrice: update.domesticPrice,
+          };
+        });
+      });
+      console.log(`💰 Early price update: ${Object.keys(quickPriceUpdates).length} positions updated`);
+    }
+
     // PHASE 2: Await profiles (should already be done or nearly done)
     setUnifiedFetchProgress({ 
       current: allTickers.length, 
@@ -2200,12 +2279,12 @@ function MonteCarloSimulator() {
       }
       
       processedCount++;
-      // Update progress during processing phase
-      if (processedCount % 2 === 0 || processedCount === totalToProcess) {
-        setUnifiedFetchProgress({ 
-          current: allTickers.length, 
-          total: allTickers.length, 
-          message: `Processing ${ticker}... (${processedCount}/${totalToProcess})` 
+      // Update progress during processing phase (throttled to every 10 tickers to reduce re-renders)
+      if (processedCount % 10 === 0 || processedCount === totalToProcess) {
+        setUnifiedFetchProgress({
+          current: allTickers.length,
+          total: allTickers.length,
+          message: `Processing ${ticker}... (${processedCount}/${totalToProcess})`
         });
         // Allow UI to update
         await new Promise(r => setTimeout(r, 0));

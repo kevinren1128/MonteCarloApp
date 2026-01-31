@@ -587,7 +587,7 @@ export const rehydrateTickerData = (data, spyData) => {
  */
 export const prepareForStorage = (data) => {
   if (!data || data.error) return data;
-  
+
   // Return only essential fields for storage
   return {
     ticker: data.ticker,
@@ -607,6 +607,12 @@ export const prepareForStorage = (data) => {
     industry: data.industry,
     type: data.type,
     fetchedAt: data.fetchedAt,
+    // Currency info - needed for international stocks
+    currency: data.currency,
+    exchangeRate: data.exchangeRate,
+    domesticPrice: data.domesticPrice,
+    isInternational: data.isInternational,
+    betaLag: data.betaLag,
     // Explicitly NOT storing: history, prices, logReturns, distribution
   };
 };
