@@ -1276,6 +1276,8 @@ function MonteCarloSimulator() {
   const [positionSort, setPositionSort] = useState({ column: 'value', direction: 'desc' });
   const [positionFilter, setPositionFilter] = useState('all'); // 'all', 'long', 'short', 'etf', 'equity'
   const [positionSearch, setPositionSearch] = useState('');
+  const [lastPriceRefresh, setLastPriceRefresh] = useState(0); // Timestamp to trigger re-sort after price refresh
+  const [shouldRefreshAfterLogin, setShouldRefreshAfterLogin] = useState(false); // Flag to trigger price refresh after login
 
   // Beta calculations (vs SPY market proxy)
   const [positionBetas, setPositionBetas] = useState({});
@@ -1514,6 +1516,14 @@ function MonteCarloSimulator() {
         }
 
         showToast({ type: 'success', message: 'Portfolio synced from cloud', duration: 3000 });
+
+        // Auto-refresh prices after login to get current market data
+        // Use a small delay to ensure positions state is updated first
+        setTimeout(() => {
+          console.log('[App] 🔄 Auto-refreshing prices after login...');
+          // Set flag to trigger refresh in separate effect (refreshAllPrices defined later)
+          setShouldRefreshAfterLogin(true);
+        }, 500);
       }
     };
 
@@ -3509,7 +3519,18 @@ function MonteCarloSimulator() {
     console.log(`Updated ${updatedCount} prices from unified data`);
 
     setIsFetchingData(false);
+
+    // Trigger re-sort by updating the timestamp
+    setLastPriceRefresh(Date.now());
   };
+
+  // Auto-refresh prices after login (triggered by flag set in login handler)
+  useEffect(() => {
+    if (shouldRefreshAfterLogin && positions.length > 0) {
+      setShouldRefreshAfterLogin(false);
+      refreshAllPrices();
+    }
+  }, [shouldRefreshAfterLogin, positions.length]);
 
   // Background price refresh - lightweight, doesn't block UI
   const isBackgroundRefreshingRef = useRef(false);
@@ -6282,6 +6303,8 @@ function MonteCarloSimulator() {
       if (priceUpdates > 0) {
         console.log(`💰 Updated ${priceUpdates} position prices`);
         markTabContentUpdated('positions');
+        // Trigger re-sort by value after price refresh
+        setLastPriceRefresh(Date.now());
       }
 
       await new Promise(r => setTimeout(r, 300)); // Brief pause for UI
@@ -7048,6 +7071,7 @@ function MonteCarloSimulator() {
             setPositionFilter={setPositionFilter}
             positionSort={positionSort}
             setPositionSort={setPositionSort}
+            lastPriceRefresh={lastPriceRefresh}
             
             // Portfolio values
             portfolioValue={portfolioValue}

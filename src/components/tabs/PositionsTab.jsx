@@ -42,6 +42,7 @@ const PositionsTab = memo(({
   setPositionFilter,
   positionSort,
   setPositionSort,
+  lastPriceRefresh,
   
   // Portfolio values
   portfolioValue,
@@ -115,6 +116,17 @@ const PositionsTab = memo(({
   const lastSortedRef = useRef([]);
   // Track last sort settings to detect when user clicks a sort header
   const lastSortSettingsRef = useRef({ column: positionSort.column, direction: positionSort.direction });
+  // Track last price refresh to trigger re-sort
+  const lastPriceRefreshRef = useRef(lastPriceRefresh);
+
+  // Clear cached sort order when prices are refreshed (forces re-sort by value)
+  useEffect(() => {
+    if (lastPriceRefresh !== lastPriceRefreshRef.current && lastPriceRefresh > 0) {
+      console.log('🔄 Price refresh detected, clearing cached sort order');
+      lastSortedRef.current = [];
+      lastPriceRefreshRef.current = lastPriceRefresh;
+    }
+  }, [lastPriceRefresh]);
 
   // Sort positions - but don't resort while actively editing
   const sortedPositions = useMemo(() => {
