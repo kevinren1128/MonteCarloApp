@@ -6234,9 +6234,25 @@ function MonteCarloSimulator() {
       setFullLoadProgress({ step: 1, total: steps.length, phase: steps[0].name, detail: 'Fetching prices and returns...' });
       console.log(`\n${'='.repeat(50)}\n🚀 FULL LOAD: Step 1/${steps.length} - ${steps[0].name}\n${'='.repeat(50)}`);
 
-      // Use smart caching: cache now properly includes FX metadata (localCurrency, fxRate)
-      // for international tickers, so forceRefresh=false can be used safely
-      const loadedMarketData = await fetchUnifiedMarketData(false);
+      // Check if any position looks international but is missing currency info
+      // This happens after login when positions come from Supabase without currency data
+      const needsFreshFetch = positions.some(p => {
+        if (!p.ticker) return false;
+        const ticker = p.ticker.toUpperCase();
+        // International ticker patterns: 6525.T, BESI.AS, VOD.L, etc.
+        const looksInternational = /\.(T|HK|SS|SZ|TW|AS|PA|DE|L|MI|MC|SW|AX|TO|V)$/i.test(ticker) ||
+                                   /^\d+\.(T|HK)$/.test(ticker);
+        // Missing currency or marked as USD but looks international
+        const missingCurrency = !p.currency || (p.currency === 'USD' && looksInternational);
+        return looksInternational && missingCurrency;
+      });
+
+      if (needsFreshFetch) {
+        console.log('🔄 Detected international tickers without currency info - forcing fresh fetch');
+      }
+
+      // Use smart caching unless positions need fresh FX data
+      const loadedMarketData = await fetchUnifiedMarketData(needsFreshFetch);
 
       // Verify data was loaded
       const loadedTickers = Object.keys(loadedMarketData || {});
