@@ -48,15 +48,18 @@ const OptimizeTab = memo(({
   styles,
 }) => {
   try {
-    const tickers = positions.map(p => p.ticker?.toUpperCase()).filter(t => t);
+    // Defensive: ensure positions is an array
+    const safePositions = Array.isArray(positions) ? positions : [];
+    const tickers = safePositions.map(p => p.ticker?.toUpperCase()).filter(t => t);
     const hasCorrelation = editedCorrelation && Array.isArray(editedCorrelation) && editedCorrelation.length >= 2;
     // Allow optimization if we have correlation data OR if we already have results (can re-run)
     const hasExistingResults = optimizationResults && optimizationResults.current;
     const canOptimize = tickers.length >= 2 && (hasCorrelation || hasExistingResults);
     
     // Detect if correlation groups/floors are configured
-    const hasCorrelationGroups = correlationGroups && Object.values(correlationGroups).some(arr => arr.length > 0);
-    const groupCount = hasCorrelationGroups ? Object.values(correlationGroups).filter(arr => arr.length > 0).length : 0;
+    const safeCorrelationGroups = correlationGroups && typeof correlationGroups === 'object' ? correlationGroups : {};
+    const hasCorrelationGroups = Object.keys(safeCorrelationGroups).length > 0 && Object.values(safeCorrelationGroups).some(arr => Array.isArray(arr) && arr.length > 0);
+    const groupCount = hasCorrelationGroups ? Object.values(safeCorrelationGroups).filter(arr => Array.isArray(arr) && arr.length > 0).length : 0;
     
     // Check if results might be stale (basic check - optimization older than correlation updates)
     const resultsTimestamp = optimizationResults?.timestamp;
@@ -600,6 +603,9 @@ const EmptyOptimizeState = memo(({ tickers, hasCorrelation, canOptimize, runPort
 // ============================================
 
 const PortfolioSummaryCard = memo(({ optimizationResults, fmtPct }) => {
+  // Defensive: ensure optimizationResults exists
+  if (!optimizationResults || !optimizationResults.current) return null;
+
   const current = optimizationResults.current;
   const mc = current?.mcResults;
   const lvg = optimizationResults.leverageRatio;
@@ -656,6 +662,10 @@ const PortfolioSummaryCard = memo(({ optimizationResults, fmtPct }) => {
 const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
   const [showAll, setShowAll] = useState(true); // Default to showing all
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'compact'
+
+  // Defensive: ensure optimizationResults exists
+  if (!optimizationResults) return null;
+
   const topSwaps = optimizationResults.topSwaps || [];
   const top3 = topSwaps.slice(0, 3);
   const remaining = topSwaps.slice(3, 15); // Show up to 15
@@ -1259,6 +1269,10 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
 const RiskContributionCard = memo(({ optimizationResults, fmtPct }) => {
   const [sortBy, setSortBy] = useState('iSharpe');
   const [hoveredIdx, setHoveredIdx] = useState(null);
+
+  // Defensive: ensure optimizationResults exists
+  if (!optimizationResults) return null;
+
   const positions = optimizationResults.positions || [];
   const lvgRatio = optimizationResults.leverageRatio || 1;
   
@@ -1506,8 +1520,8 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
   const cardRef = useRef(null);
   const tableContainerRef = useRef(null);
   
-  if (!matrix) return null;
-  
+  if (!matrix || !matrix.tickers || !Array.isArray(matrix.tickers)) return null;
+
   const n = matrix.tickers.length;
   const maxDelta = Math.max(...matrix.deltaSharpe.flat().map(Math.abs));
   const maxDeltaVol = Math.max(...matrix.deltaVol.flat().map(Math.abs));
@@ -2178,6 +2192,9 @@ const SwapHeatmapCard = memo(({ swapMatrix, isAnalytical, getHeatmapColor, paths
 // ============================================
 
 const RiskParityCard = memo(({ optimizationResults, fmtPct }) => {
+  // Defensive: ensure optimizationResults exists
+  if (!optimizationResults) return null;
+
   const rp = optimizationResults.riskParity;
   if (!rp) return null;
   
