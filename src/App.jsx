@@ -33,9 +33,8 @@ import { CorrelationTab, SimulationTab, OptimizeTab, PositionsTab, FactorsTab, E
 // Styles (extracted to reduce file size)
 import { styles } from './styles/appStyles';
 
-// Yahoo Finance API service - now routes through Cloudflare Worker with fallback
+// Yahoo Finance API service - routes through Cloudflare Worker with CORS proxy fallback
 import { fetchYahooQuote, fetchYahooHistory, fetchYahooProfile, fetchExchangeRate, fetchYahooData } from './services/yahooFinance';
-import { fetchPrices, fetchQuotes, fetchProfiles, fetchExchangeRates, isWorkerAvailable } from './services/marketService';
 
 // Position price cache for persistent storage
 import {

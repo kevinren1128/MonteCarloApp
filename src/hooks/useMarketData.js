@@ -3,8 +3,14 @@ import { MarketDataContext } from '../contexts/MarketDataContext';
 import { PortfolioContext } from '../contexts/PortfolioContext';
 import { toast } from '../components/common';
 
-// Services
-import { fetchYahooQuote } from '../services/yahooFinance';
+// Services - use Worker-first functions from yahooFinance
+import {
+  fetchYahooQuote,
+  fetchYahooHistory,
+  fetchYahooProfile,
+  fetchExchangeRate,
+  fetchYahooData
+} from '../services/yahooFinance';
 
 // Utils
 import { 
@@ -48,140 +54,8 @@ export function useMarketData() {
   
   const { positions } = useContext(PortfolioContext);
 
-  // Yahoo Finance API functions using allorigins proxy
-  const fetchYahooData = async (url) => {
-    // Try with allorigins proxy (most reliable for Yahoo)
-    try {
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const response = await fetch(proxyUrl);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.contents) {
-          return JSON.parse(data.contents);
-        }
-      }
-    } catch (e) {
-      console.warn('allorigins proxy failed:', e.message);
-    }
-    
-    // Fallback: try corsproxy.io
-    try {
-      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-      const response = await fetch(proxyUrl);
-      if (response.ok) {
-        return await response.json();
-      }
-    } catch (e) {
-      console.warn('corsproxy.io failed:', e.message);
-    }
-    
-    // Last resort: try direct (works if CORS is disabled or same-origin)
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
-    } catch (e) {
-      console.warn('Direct fetch failed:', e.message);
-    }
-    
-    return null;
-  };
-
-  // Fetch currency exchange rate from Yahoo Finance
-  const fetchExchangeRate = async (fromCurrency, toCurrency = 'USD') => {
-    if (fromCurrency === toCurrency) return 1;
-    
-    try {
-      const symbol = `${fromCurrency}${toCurrency}=X`;
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
-      const data = await fetchYahooData(url);
-      
-      if (data?.chart?.result?.[0]) {
-        const meta = data.chart.result[0].meta;
-        const rate = meta?.regularMarketPrice || meta?.previousClose;
-        if (rate) return rate;
-      }
-      
-      // Fallback: try reverse pair
-      const reverseSymbol = `${toCurrency}${fromCurrency}=X`;
-      const reverseUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${reverseSymbol}?interval=1d&range=1d`;
-      const reverseData = await fetchYahooData(reverseUrl);
-      
-      if (reverseData?.chart?.result?.[0]) {
-        const meta = reverseData.chart.result[0].meta;
-        const rate = meta?.regularMarketPrice || meta?.previousClose;
-        if (rate) return 1 / rate;
-      }
-      
-      return null;
-    } catch (error) {
-      console.warn(`Failed to fetch exchange rate ${fromCurrency}/${toCurrency}:`, error);
-      return null;
-    }
-  };
-
-  // Fetch detailed profile including sector/industry
-  const fetchYahooProfile = async (symbol) => {
-    try {
-      const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=assetProfile,summaryProfile,quoteType,summaryDetail`;
-      const data = await fetchYahooData(url);
-      
-      if (data?.quoteSummary?.result?.[0]) {
-        const result = data.quoteSummary.result[0];
-        const profile = result.assetProfile || result.summaryProfile || {};
-        const quoteType = result.quoteType || {};
-        
-        return {
-          sector: profile.sector || null,
-          industry: profile.industry || null,
-          longName: quoteType.longName || profile.longBusinessSummary?.slice(0, 100) || null,
-          quoteType: quoteType.quoteType || 'EQUITY',
-          shortName: quoteType.shortName || symbol,
-        };
-      }
-      return null;
-    } catch (error) {
-      console.warn(`Failed to fetch profile for ${symbol}:`, error);
-      return null;
-    }
-  };
-
-  const fetchYahooHistory = async (symbol, range = '1y', interval = '1d') => {
-    try {
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`;
-      const data = await fetchYahooData(url);
-      
-      if (data?.chart?.result?.[0]) {
-        const result = data.chart.result[0];
-        const meta = result.meta;
-        const timestamps = result.timestamp || [];
-        const closes = result.indicators?.adjclose?.[0]?.adjclose || 
-                       result.indicators?.quote?.[0]?.close || [];
-        
-        const prices = [];
-        for (let i = 0; i < timestamps.length; i++) {
-          if (closes[i] != null) {
-            prices.push({
-              date: new Date(timestamps[i] * 1000),
-              close: closes[i],
-            });
-          }
-        }
-        
-        return {
-          prices,
-          currency: meta?.currency || 'USD',
-          regularMarketPrice: meta?.regularMarketPrice,
-          previousClose: meta?.previousClose,
-        };
-      }
-      return null;
-    } catch (error) {
-      console.warn(`Failed to fetch history for ${symbol}:`, error);
-      return null;
-    }
-  };
+  // Note: fetchYahooQuote, fetchYahooHistory, fetchYahooProfile, fetchExchangeRate, fetchYahooData
+  // are imported from yahooFinance.js which uses Cloudflare Worker with CORS proxy fallback
 
   /**
    * MAIN UNIFIED FETCH - fetches everything in parallel
@@ -264,9 +138,10 @@ export function useMarketData() {
         if (!ticker) continue;
 
         try {
-          const historyResult = await fetchYahooHistory(ticker, '5y', '1d');
+          // fetchYahooHistory returns array of {date, close} directly
+          const prices = await fetchYahooHistory(ticker, '5y', '1d');
           completedCount++;
-          const daysCount = historyResult?.prices?.length || 0;
+          const daysCount = prices?.length || 0;
           setUnifiedFetchProgress({
             current: completedCount,
             total: allTickers.length,
@@ -275,9 +150,9 @@ export function useMarketData() {
           });
           historyFetchResults.push({
             ticker,
-            data: historyResult?.prices || null,
-            currency: historyResult?.currency || 'USD',
-            regularMarketPrice: historyResult?.regularMarketPrice,
+            data: prices || null,
+            currency: 'USD', // Currency info not available from this API
+            regularMarketPrice: prices?.[prices.length - 1]?.close,
             cached: false
           });
         } catch (err) {
