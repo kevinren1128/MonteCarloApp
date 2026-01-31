@@ -73,3 +73,14 @@ Read `docs/ARCHITECTURE.md` first for comprehensive system documentation, algori
 - Push to GitHub after commits
 - Use claude-mem:make-plan for multi-step implementation tasks
 - Use claude-mem:do to execute implementation plans
+
+### Consult Codex for Second Opinions
+
+**Always ask Codex MCP server for review/alternatives when:**
+- Preparing implementation plans for complex features
+- Debugging tricky bugs (before implementing a fix)
+- Proposing refactoring strategies
+- Validating architectural decisions
+- Uncertain about the best approach
+
+This provides a second perspective and catches potential issues early.
