@@ -1626,7 +1626,9 @@ function MonteCarloSimulator() {
 
     // Skip if positions haven't actually changed
     const positionsKey = JSON.stringify(positions.map(p => ({
-      ticker: p.ticker, quantity: p.quantity, p5: p.p5, p25: p.p25, p50: p.p50, p75: p.p75, p95: p.p95
+      ticker: p.ticker, quantity: p.quantity, price: p.price,
+      p5: p.p5, p25: p.p25, p50: p.p50, p75: p.p75, p95: p.p95,
+      currency: p.currency, domesticPrice: p.domesticPrice, exchangeRate: p.exchangeRate
     })));
 
     if (positionsKey === lastSavedPositionsRef.current) {
