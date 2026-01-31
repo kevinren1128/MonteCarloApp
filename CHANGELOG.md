@@ -4,6 +4,44 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [6.4.2] - 2026-01-31
+
+### 🎛️ Snap-to-Width Sidebar
+
+Professional "snap-to-width" sidebar with three preset modes and smooth animations.
+
+#### Three Sidebar Modes
+
+| Mode | Width | Content |
+|------|-------|---------|
+| **Narrow** | 56px | Icons only |
+| **Medium** | 180px | Icons + short labels (Pos, Est, Dist, Corr, Sim, Fac, Opt, Exp) |
+| **Wide** | 280px | Full labels + keyboard shortcuts |
+
+#### Features
+
+- **Smooth drag**: Freely drag the resize handle
+- **Snappy release**: On mouseup, sidebar animates to nearest snap point (180ms cubic-bezier)
+- **Visual feedback during drag**:
+  - Ghost line showing target snap position
+  - Floating label showing mode name (Narrow/Medium/Wide)
+  - Three-dot zone indicator in top-right corner
+- **Mode cycling**: Click footer button or double-click resize handle to cycle modes
+- **Persistence**: Mode saved to localStorage as `sidebar-mode`
+
+#### Snap Thresholds
+
+- Drag ≤118px → Narrow (56px)
+- 118px < Drag ≤230px → Medium (180px)
+- Drag >230px → Wide (280px)
+
+#### Files Changed
+
+- `src/components/common/Sidebar.jsx` - Complete snap-to-width implementation
+- `docs/SIDEBAR_SNAP_DESIGN.md` - Design specification document
+
+---
+
 ## [6.4.1] - 2026-01-31
 
 ### 🌍 International Currency Persistence & UX Improvements

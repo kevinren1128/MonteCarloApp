@@ -12,26 +12,56 @@ import { AnimatedPortfolioValue } from './AnimatedCounter';
 // Monospace font stack
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 
-// Width constraints
-const MIN_COLLAPSED_WIDTH = 56;
-const COLLAPSE_THRESHOLD = 100; // Auto-collapse when dragged below this
-const MIN_EXPANDED_WIDTH = 120;
-const MAX_EXPANDED_WIDTH = 400;
-const DEFAULT_EXPANDED_WIDTH = 220;
+// ============================================
+// SNAP-TO-WIDTH CONFIGURATION
+// ============================================
 
-// LocalStorage key for persisting width
-const WIDTH_STORAGE_KEY = 'sidebar-expanded-width';
+// Snap point widths
+const SNAP_WIDTHS = {
+  narrow: 56,   // Icons only
+  medium: 180,  // Icons + short labels
+  wide: 280,    // Full labels + shortcuts
+};
 
-// Tab configuration with icons
+// Threshold midpoints for snap calculation
+const SNAP_THRESHOLDS = {
+  narrowToMedium: 118,  // (56 + 180) / 2
+  mediumToWide: 230,    // (180 + 280) / 2
+};
+
+// Legacy constants (for backwards compatibility)
+const MIN_COLLAPSED_WIDTH = SNAP_WIDTHS.narrow;
+const MAX_EXPANDED_WIDTH = SNAP_WIDTHS.wide;
+
+// LocalStorage keys
+const MODE_STORAGE_KEY = 'sidebar-mode';
+
+// Snap animation timing
+const SNAP_TRANSITION = 'width 180ms cubic-bezier(0.2, 0.0, 0.0, 1), min-width 180ms cubic-bezier(0.2, 0.0, 0.0, 1)';
+
+// Calculate nearest snap mode from width
+function calculateNearestSnap(width) {
+  if (width <= SNAP_THRESHOLDS.narrowToMedium) return 'narrow';
+  if (width <= SNAP_THRESHOLDS.mediumToWide) return 'medium';
+  return 'wide';
+}
+
+// Calculate distance to nearest snap point
+function getSnapDistance(width) {
+  const nearest = calculateNearestSnap(width);
+  return Math.abs(width - SNAP_WIDTHS[nearest]);
+}
+
+// Tab configuration with icons and short labels for medium mode
 const TABS = [
-  { id: 'positions', label: 'Positions', icon: '📊', shortcut: '1' },
-  { id: 'consensus', label: 'Consensus', icon: '📋', shortcut: '2' },
-  { id: 'distributions', label: 'Distributions', icon: '📈', shortcut: '3' },
-  { id: 'correlation', label: 'Correlation', icon: '🔗', shortcut: '4' },
-  { id: 'simulation', label: 'Simulation', icon: '🎲', shortcut: '5' },
-  { id: 'factors', label: 'Factors', icon: '⚡', shortcut: '6' },
-  { id: 'optimize', label: 'Optimize', icon: '🎯', shortcut: '7' },
-  { id: 'export', label: 'Export', icon: '📄', shortcut: '8' },
+  { id: 'positions', label: 'Positions', shortLabel: 'Pos', icon: '📊', shortcut: '1' },
+  { id: 'consensus', label: 'Consensus', shortLabel: 'Est', icon: '📋', shortcut: '2' },
+  { id: 'distributions', label: 'Distributions', shortLabel: 'Dist', icon: '📈', shortcut: '3' },
+  { id: 'correlation', label: 'Correlation', shortLabel: 'Corr', icon: '🔗', shortcut: '4' },
+  { id: 'simulation', label: 'Simulation', shortLabel: 'Sim', icon: '🎲', shortcut: '5' },
+  { id: 'factors', label: 'Factors', shortLabel: 'Fac', icon: '⚡', shortcut: '6' },
+  { id: 'optimize', label: 'Optimize', shortLabel: 'Opt', icon: '🎯', shortcut: '7' },
+  { id: 'export', label: 'Export', shortLabel: 'Exp', icon: '📄', shortcut: '8' },
 ];
 
 const Sidebar = memo(({
@@ -56,38 +86,51 @@ const Sidebar = memo(({
   UserMenu,
   syncState,
 }) => {
-  // Load saved width from localStorage
-  const [expandedWidth, setExpandedWidth] = useState(() => {
+  // Load saved mode from localStorage
+  const [sidebarMode, setSidebarMode] = useState(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(WIDTH_STORAGE_KEY);
-      if (saved) {
-        const parsed = parseInt(saved, 10);
-        if (!isNaN(parsed) && parsed >= MIN_EXPANDED_WIDTH && parsed <= MAX_EXPANDED_WIDTH) {
-          return parsed;
-        }
+      const saved = localStorage.getItem(MODE_STORAGE_KEY);
+      if (saved && ['narrow', 'medium', 'wide'].includes(saved)) {
+        return saved;
       }
     }
-    return DEFAULT_EXPANDED_WIDTH;
+    return isExpanded ? 'wide' : 'narrow';
   });
+
+  // Current width (snapped or during drag)
+  const [currentWidth, setCurrentWidth] = useState(SNAP_WIDTHS[sidebarMode]);
 
   // Drag state
   const [isDragging, setIsDragging] = useState(false);
+  const [nearestSnap, setNearestSnap] = useState(sidebarMode);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
 
-  // Save width to localStorage when it changes
+  // Save mode to localStorage when it changes
   useEffect(() => {
-    localStorage.setItem(WIDTH_STORAGE_KEY, String(expandedWidth));
-  }, [expandedWidth]);
+    localStorage.setItem(MODE_STORAGE_KEY, sidebarMode);
+    // Also update the parent's isExpanded state
+    const shouldBeExpanded = sidebarMode !== 'narrow';
+    if (shouldBeExpanded !== isExpanded) {
+      onToggle();
+    }
+  }, [sidebarMode]);
+
+  // Sync currentWidth when not dragging
+  useEffect(() => {
+    if (!isDragging) {
+      setCurrentWidth(SNAP_WIDTHS[sidebarMode]);
+    }
+  }, [sidebarMode, isDragging]);
 
   // Handle drag start
   const handleDragStart = useCallback((e) => {
     e.preventDefault();
     setIsDragging(true);
     dragStartX.current = e.clientX;
-    // If collapsed, start from collapsed width
-    dragStartWidth.current = isExpanded ? expandedWidth : MIN_COLLAPSED_WIDTH;
-  }, [isExpanded, expandedWidth]);
+    dragStartWidth.current = currentWidth;
+    setNearestSnap(sidebarMode);
+  }, [currentWidth, sidebarMode]);
 
   // Handle drag move
   useEffect(() => {
@@ -97,26 +140,26 @@ const Sidebar = memo(({
       const delta = e.clientX - dragStartX.current;
       const rawWidth = dragStartWidth.current + delta;
 
-      // Allow dragging all the way down to collapsed width
+      // Clamp to valid range
       const newWidth = Math.min(
-        MAX_EXPANDED_WIDTH,
-        Math.max(MIN_COLLAPSED_WIDTH, rawWidth)
+        MAX_EXPANDED_WIDTH + 50, // Allow slight overshoot for feel
+        Math.max(MIN_COLLAPSED_WIDTH - 10, rawWidth)
       );
-      setExpandedWidth(newWidth);
+      setCurrentWidth(newWidth);
+
+      // Calculate nearest snap for visual feedback
+      const nearest = calculateNearestSnap(newWidth);
+      setNearestSnap(nearest);
     };
 
     const handleMouseUp = () => {
-      setIsDragging(false);
+      // Calculate final snap mode
+      const finalMode = calculateNearestSnap(currentWidth);
 
-      // Auto-collapse if dragged below threshold while expanded
-      if (expandedWidth < COLLAPSE_THRESHOLD && isExpanded) {
-        onToggle(); // Collapse the sidebar
-        setExpandedWidth(DEFAULT_EXPANDED_WIDTH); // Reset width for next expand
-      }
-      // Auto-expand if dragged above threshold while collapsed
-      else if (expandedWidth >= COLLAPSE_THRESHOLD && !isExpanded) {
-        onToggle(); // Expand the sidebar
-      }
+      // Apply snap with animation
+      setSidebarMode(finalMode);
+      setCurrentWidth(SNAP_WIDTHS[finalMode]);
+      setIsDragging(false);
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -132,11 +175,15 @@ const Sidebar = memo(({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isDragging, expandedWidth, isExpanded, onToggle]);
+  }, [isDragging, currentWidth]);
 
-  // During drag, use the current expandedWidth regardless of isExpanded state
-  // This allows the visual feedback while dragging from collapsed state
-  const sidebarWidth = isDragging ? expandedWidth : (isExpanded ? expandedWidth : MIN_COLLAPSED_WIDTH);
+  // Computed values for rendering
+  const sidebarWidth = currentWidth;
+  const isNarrow = sidebarMode === 'narrow';
+  const isMedium = sidebarMode === 'medium';
+  const isWide = sidebarMode === 'wide';
+  const showLabels = !isNarrow; // Show labels in medium and wide
+  const showShortcuts = isWide; // Only show shortcuts in wide mode
 
   const styles = {
     sidebar: {
@@ -147,15 +194,15 @@ const Sidebar = memo(({
       borderRight: '1px solid rgba(42, 42, 74, 0.6)',
       display: 'flex',
       flexDirection: 'column',
-      // Only animate during toggle, not during drag
-      transition: isDragging ? 'none' : 'width 0.25s ease, min-width 0.25s ease',
+      // Snappy transition on release, none during drag
+      transition: isDragging ? 'none' : SNAP_TRANSITION,
       position: 'relative',
       zIndex: 100,
       fontFamily: FONT_FAMILY,
       overflow: 'hidden',
     },
     header: {
-      padding: isExpanded ? '16px' : '16px 8px',
+      padding: showLabels ? '16px' : '16px 8px',
       borderBottom: '1px solid rgba(42, 42, 74, 0.4)',
       display: 'flex',
       flexDirection: 'column',
@@ -174,14 +221,14 @@ const Sidebar = memo(({
       flexShrink: 0,
     },
     logoText: {
-      fontSize: '13px',
+      fontSize: isMedium ? '11px' : '13px',
       fontWeight: '600',
       background: 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)',
       WebkitBackgroundClip: 'text',
       WebkitTextFillColor: 'transparent',
       whiteSpace: 'nowrap',
-      opacity: isExpanded ? 1 : 0,
-      transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+      opacity: showLabels ? 1 : 0,
+      transition: showLabels ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
       letterSpacing: '0.5px',
     },
     portfolioValue: {
@@ -189,14 +236,14 @@ const Sidebar = memo(({
       flexDirection: 'column',
       alignItems: 'center',
       gap: '2px',
-      padding: isExpanded ? '10px 12px' : '0',
+      padding: showLabels ? (isMedium ? '8px 10px' : '10px 12px') : '0',
       background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.08) 0%, rgba(123, 47, 247, 0.05) 100%)',
       borderRadius: '8px',
-      border: isExpanded ? '1px solid rgba(0, 212, 255, 0.2)' : '1px solid transparent',
-      opacity: isExpanded ? 1 : 0,
-      maxHeight: isExpanded ? '80px' : '0',
+      border: showLabels ? '1px solid rgba(0, 212, 255, 0.2)' : '1px solid transparent',
+      opacity: showLabels ? 1 : 0,
+      maxHeight: showLabels ? '80px' : '0',
       overflow: 'hidden',
-      transition: isExpanded
+      transition: showLabels
         ? 'opacity 0.2s ease 0.1s, max-height 0.25s ease, padding 0.25s ease, border-color 0.25s ease'
         : 'opacity 0.1s ease, max-height 0.25s ease, padding 0.25s ease, border-color 0.25s ease',
     },
@@ -224,9 +271,9 @@ const Sidebar = memo(({
     tabButton: {
       display: 'flex',
       alignItems: 'center',
-      gap: isExpanded ? '12px' : 0,
-      padding: isExpanded ? '10px 12px' : '10px',
-      justifyContent: isExpanded ? 'flex-start' : 'center',
+      gap: showLabels ? (isMedium ? '8px' : '12px') : 0,
+      padding: showLabels ? (isMedium ? '8px 10px' : '10px 12px') : '10px',
+      justifyContent: showLabels ? 'flex-start' : 'center',
       background: 'transparent',
       border: 'none',
       borderRadius: '8px',
@@ -243,23 +290,23 @@ const Sidebar = memo(({
       flexShrink: 0,
     },
     tabLabel: {
-      fontSize: '12px',
+      fontSize: isMedium ? '11px' : '12px',
       fontWeight: '500',
       whiteSpace: 'nowrap',
-      opacity: isExpanded ? 1 : 0,
-      transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+      opacity: showLabels ? 1 : 0,
+      transition: showLabels ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
       overflow: 'hidden',
     },
     tabShortcut: {
       marginLeft: 'auto',
       fontSize: '10px',
-      padding: isExpanded ? '2px 6px' : 0,
+      padding: showShortcuts ? '2px 6px' : 0,
       background: 'rgba(255, 255, 255, 0.08)',
       borderRadius: '4px',
-      opacity: isExpanded ? 0.6 : 0,
-      width: isExpanded ? 'auto' : 0,
+      opacity: showShortcuts ? 0.6 : 0,
+      width: showShortcuts ? 'auto' : 0,
       overflow: 'hidden',
-      transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+      transition: showShortcuts ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
     },
     footer: {
       padding: '12px 8px',
@@ -326,20 +373,113 @@ const Sidebar = memo(({
     background: isDragging ? 'rgba(0, 212, 255, 0.3)' : 'transparent',
     transition: isDragging ? 'none' : 'background 0.15s ease',
     zIndex: 101,
+    boxShadow: isDragging && getSnapDistance(currentWidth) < 15
+      ? '0 0 12px rgba(0, 212, 255, 0.5)'
+      : 'none',
   };
+
+  // Ghost line showing target snap position
+  const targetSnapWidth = SNAP_WIDTHS[nearestSnap];
+  const ghostLineStyle = {
+    position: 'absolute',
+    top: 0,
+    left: targetSnapWidth - 1,
+    width: '2px',
+    height: '100%',
+    background: getSnapDistance(currentWidth) < 15
+      ? 'rgba(0, 212, 255, 0.5)'
+      : 'rgba(0, 212, 255, 0.2)',
+    zIndex: 99,
+    pointerEvents: 'none',
+    opacity: isDragging ? 1 : 0,
+    transition: 'opacity 0.15s ease, background 0.15s ease',
+  };
+
+  // Floating label showing target mode
+  const snapLabels = { narrow: 'Narrow', medium: 'Medium', wide: 'Wide' };
+  const floatingLabelStyle = {
+    position: 'absolute',
+    top: '50%',
+    left: targetSnapWidth + 12,
+    transform: 'translateY(-50%)',
+    padding: '4px 10px',
+    background: 'rgba(0, 212, 255, 0.15)',
+    border: '1px solid rgba(0, 212, 255, 0.3)',
+    borderRadius: '4px',
+    fontSize: '10px',
+    fontWeight: '600',
+    color: '#00d4ff',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    whiteSpace: 'nowrap',
+    zIndex: 102,
+    pointerEvents: 'none',
+    opacity: isDragging && getSnapDistance(currentWidth) < 25 ? 1 : 0,
+    transition: 'opacity 0.15s ease',
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+  };
+
+  // Three-dot zone indicator
+  const ZoneIndicator = () => (
+    <div style={{
+      position: 'absolute',
+      top: '12px',
+      right: '12px',
+      display: 'flex',
+      gap: '6px',
+      padding: '6px 10px',
+      background: 'rgba(0, 0, 0, 0.6)',
+      borderRadius: '12px',
+      border: '1px solid rgba(255, 255, 255, 0.1)',
+      zIndex: 103,
+      pointerEvents: 'none',
+      opacity: isDragging ? 1 : 0,
+      transition: 'opacity 0.15s ease',
+    }}>
+      {['narrow', 'medium', 'wide'].map((mode) => (
+        <div
+          key={mode}
+          style={{
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            background: nearestSnap === mode
+              ? 'linear-gradient(135deg, #00d4ff, #7b2ff7)'
+              : 'rgba(255, 255, 255, 0.2)',
+            boxShadow: nearestSnap === mode
+              ? '0 0 8px rgba(0, 212, 255, 0.5)'
+              : 'none',
+            transition: 'all 0.15s ease',
+          }}
+          title={mode.charAt(0).toUpperCase() + mode.slice(1)}
+        />
+      ))}
+    </div>
+  );
 
   return (
     <div style={styles.sidebar}>
-      {/* Resize Handle - available in both expanded and collapsed states */}
+      {/* Ghost line showing target snap position */}
+      <div style={ghostLineStyle} />
+
+      {/* Floating label showing target mode */}
+      <div style={floatingLabelStyle}>
+        {snapLabels[nearestSnap]}
+      </div>
+
+      {/* Three-dot zone indicator */}
+      <ZoneIndicator />
+
+      {/* Resize Handle - available in all modes */}
       <div
         style={resizeHandleStyle}
         onMouseDown={handleDragStart}
         onDoubleClick={() => {
-          if (isExpanded) {
-            setExpandedWidth(DEFAULT_EXPANDED_WIDTH);
-          } else {
-            onToggle(); // Expand on double-click when collapsed
-          }
+          // Double-click cycles through modes: narrow → medium → wide → narrow
+          const modeOrder = ['narrow', 'medium', 'wide'];
+          const currentIndex = modeOrder.indexOf(sidebarMode);
+          const nextIndex = (currentIndex + 1) % modeOrder.length;
+          setSidebarMode(modeOrder[nextIndex]);
         }}
         onMouseEnter={(e) => {
           if (!isDragging) {
@@ -351,7 +491,7 @@ const Sidebar = memo(({
             e.currentTarget.style.background = 'transparent';
           }
         }}
-        title={isExpanded ? "Drag to resize (double-click to reset)" : "Drag to expand"}
+        title="Drag to resize (double-click to cycle modes)"
       />
       {/* Header with logo and portfolio value */}
       <div style={styles.header}>
@@ -362,27 +502,27 @@ const Sidebar = memo(({
           </div>
         </div>
 
-        {/* Portfolio Value - Expanded */}
+        {/* Portfolio Value - Expanded (medium/wide mode) */}
         <div style={styles.portfolioValue}>
           <span style={{
             ...styles.valueLabel,
-            opacity: isExpanded ? 1 : 0,
-            transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
-          }}>Portfolio Value</span>
+            opacity: showLabels ? 1 : 0,
+            transition: showLabels ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+          }}>{isMedium ? 'Value' : 'Portfolio Value'}</span>
           <div style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             gap: '2px',
-            opacity: isExpanded ? 1 : 0,
-            transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+            opacity: showLabels ? 1 : 0,
+            transition: showLabels ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
             minHeight: '24px', // Fixed height to prevent layout shift
             contain: 'layout', // Prevent reflows from affecting other elements
           }}>
             <AnimatedPortfolioValue
               value={portfolioValue || 0}
               style={{
-                fontSize: '16px',
+                fontSize: isMedium ? '14px' : '16px',
                 fontWeight: '700',
                 color: '#00d4ff',
               }}
@@ -390,16 +530,16 @@ const Sidebar = memo(({
           </div>
         </div>
 
-        {/* Portfolio Value - Collapsed (compact display) */}
+        {/* Portfolio Value - Collapsed (narrow mode - icon only) */}
         <div
           style={{
             display: 'flex',
             justifyContent: 'center',
-            padding: isExpanded ? '0' : '8px 0',
-            opacity: isExpanded ? 0 : 1,
-            maxHeight: isExpanded ? '0' : '50px',
+            padding: showLabels ? '0' : '8px 0',
+            opacity: showLabels ? 0 : 1,
+            maxHeight: showLabels ? '0' : '50px',
             overflow: 'hidden',
-            transition: isExpanded
+            transition: showLabels
               ? 'opacity 0.1s ease, max-height 0.25s ease, padding 0.25s ease'
               : 'opacity 0.15s ease 0.15s, max-height 0.25s ease, padding 0.25s ease',
           }}
@@ -440,7 +580,7 @@ const Sidebar = memo(({
                 position: 'relative',
               }}
               onClick={() => onTabChange(tab.id)}
-              title={!isExpanded ? `${tab.label} (${tab.shortcut})${hasNewContent ? ' • New' : isProcessing ? ' • Processing' : ''}` : undefined}
+              title={isNarrow ? `${tab.label} (${tab.shortcut})${hasNewContent ? ' • New' : isProcessing ? ' • Processing' : ''}` : undefined}
               onMouseOver={(e) => {
                 if (!isActive) {
                   e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
@@ -457,12 +597,12 @@ const Sidebar = memo(({
               <span style={{ ...styles.tabIcon, flexShrink: 0 }}>{tab.icon}</span>
               <span style={{
                 ...styles.tabLabel,
-                width: isExpanded ? 'auto' : 0,
-                transition: isExpanded ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-              }}>{tab.label}</span>
+                width: showLabels ? 'auto' : 0,
+                transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
+              }}>{isMedium ? tab.shortLabel : tab.label}</span>
               <span style={{
                 ...styles.tabShortcut,
-                transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+                transition: showShortcuts ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
                 flexShrink: 0,
               }}>{tab.shortcut}</span>
               {/* Status indicator dot - green for new content (unvisited), orange for processing */}
@@ -509,13 +649,13 @@ const Sidebar = memo(({
           borderTop: '1px solid rgba(42, 42, 74, 0.4)',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: isExpanded ? 'space-between' : 'center',
+          justifyContent: showLabels ? 'space-between' : 'center',
           gap: '8px',
           flexShrink: 0,
         }}>
           {UserMenu && <UserMenu syncState={syncState} />}
-          {/* Autosave indicator - right justified next to user avatar */}
-          {AutosaveIndicator && isExpanded && (
+          {/* Autosave indicator - right justified next to user avatar (only in wide mode) */}
+          {AutosaveIndicator && isWide && (
             <div style={{ flexShrink: 0, marginLeft: 'auto' }}>
               <AutosaveIndicator status={autosaveStatus} compact={true} />
             </div>
@@ -538,9 +678,9 @@ const Sidebar = memo(({
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: isExpanded ? 'flex-start' : 'center',
-            gap: isExpanded ? '10px' : 0,
-            padding: isExpanded ? '8px 12px' : '8px',
+            justifyContent: showLabels ? 'flex-start' : 'center',
+            gap: showLabels ? (isMedium ? '8px' : '10px') : 0,
+            padding: showLabels ? (isMedium ? '8px 10px' : '8px 12px') : '8px',
             background: isLoading
               ? 'rgba(26, 58, 42, 0.8)'
               : 'linear-gradient(135deg, rgba(42, 106, 74, 0.8) 0%, rgba(26, 74, 58, 0.8) 100%)',
@@ -548,7 +688,7 @@ const Sidebar = memo(({
             borderRadius: '6px',
             color: '#fff',
             cursor: isLoading ? 'wait' : 'pointer',
-            fontSize: '11px',
+            fontSize: isMedium ? '10px' : '11px',
             fontWeight: '600',
             fontFamily: FONT_FAMILY,
             opacity: isLoading ? 0.7 : 1,
@@ -557,17 +697,17 @@ const Sidebar = memo(({
           }}
           onClick={onLoadAll}
           disabled={isLoading}
-          title={isExpanded ? '' : 'Load All (⌘L)'}
+          title={isNarrow ? 'Load All (⌘L)' : ''}
         >
           <span style={{ fontSize: '14px', flexShrink: 0 }}>{isLoading ? '⏳' : '🚀'}</span>
           <span style={{
-            opacity: isExpanded ? 1 : 0,
-            width: isExpanded ? 'auto' : 0,
+            opacity: showLabels ? 1 : 0,
+            width: showLabels ? 'auto' : 0,
             overflow: 'hidden',
             whiteSpace: 'nowrap',
-            transition: isExpanded ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-          }}>{isLoading ? 'Loading...' : 'Load All'}</span>
-          {!isLoading && (
+            transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
+          }}>{isLoading ? (isMedium ? '...' : 'Loading...') : (isMedium ? 'Load' : 'Load All')}</span>
+          {!isLoading && showShortcuts && (
             <kbd style={{
               marginLeft: 'auto',
               padding: '1px 4px',
@@ -575,8 +715,8 @@ const Sidebar = memo(({
               background: 'rgba(255,255,255,0.15)',
               borderRadius: '3px',
               border: '1px solid rgba(255,255,255,0.2)',
-              opacity: isExpanded ? 1 : 0,
-              transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
+              opacity: 1,
+              transition: 'opacity 0.15s ease 0.15s',
               flexShrink: 0,
             }}>⌘L</kbd>
           )}
@@ -622,8 +762,8 @@ const Sidebar = memo(({
                 );
               })()}
             </div>
-            {/* Progress text - only when expanded */}
-            {isExpanded && (
+            {/* Progress text - only when showing labels (medium/wide mode) */}
+            {showLabels && (
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -631,14 +771,16 @@ const Sidebar = memo(({
                 alignItems: 'center',
               }}>
                 <div style={{
-                  fontSize: '9px',
+                  fontSize: isMedium ? '8px' : '9px',
                   color: '#00d4ff',
                   textAlign: 'center',
                 }}>
-                  {loadProgress.step}/{loadProgress.total} - {loadProgress.phase}
+                  {isMedium
+                    ? `${loadProgress.step}/${loadProgress.total}`
+                    : `${loadProgress.step}/${loadProgress.total} - ${loadProgress.phase}`}
                 </div>
                 {/* Show market data progress during step 1 or standalone market data loading */}
-                {marketDataProgress?.total > 0 && (
+                {marketDataProgress?.total > 0 && isWide && (
                   <div style={{
                     fontSize: '8px',
                     color: '#7b2ff7',
@@ -647,8 +789,8 @@ const Sidebar = memo(({
                     {marketDataProgress.current}/{marketDataProgress.total} tickers loaded
                   </div>
                 )}
-                {/* Show loading ticker name */}
-                {marketDataProgress?.message && marketDataProgress.current < marketDataProgress.total && (
+                {/* Show loading ticker name - only in wide mode */}
+                {marketDataProgress?.message && marketDataProgress.current < marketDataProgress.total && isWide && (
                   <div style={{
                     fontSize: '8px',
                     color: '#666',
@@ -661,8 +803,8 @@ const Sidebar = memo(({
                     Loading {marketDataProgress.message}...
                   </div>
                 )}
-                {/* Show other phase details */}
-                {loadProgress.detail && (!marketDataProgress?.total || marketDataProgress.total === 0) && (
+                {/* Show other phase details - only in wide mode */}
+                {loadProgress.detail && (!marketDataProgress?.total || marketDataProgress.total === 0) && isWide && (
                   <div style={{
                     fontSize: '8px',
                     color: '#888',
@@ -685,25 +827,25 @@ const Sidebar = memo(({
           <div style={{
             display: 'flex',
             gap: '4px',
-            flexDirection: isExpanded ? 'row' : 'column',
+            flexDirection: showLabels ? 'row' : 'column',
             width: '100%',
             overflow: 'hidden',
           }}>
             <button
               style={{
-                flex: isExpanded ? 1 : 'none',
+                flex: showLabels ? 1 : 'none',
                 minWidth: 0,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: isExpanded ? '4px' : 0,
-                padding: isExpanded ? '6px 8px' : '6px',
+                gap: showLabels ? '4px' : 0,
+                padding: showLabels ? '6px 8px' : '6px',
                 background: 'rgba(50, 50, 80, 0.6)',
                 border: '1px solid rgba(255, 255, 255, 0.1)',
                 borderRadius: '5px',
                 color: '#aaa',
                 cursor: 'pointer',
-                fontSize: '9px',
+                fontSize: isMedium ? '8px' : '9px',
                 fontFamily: FONT_FAMILY,
                 transition: 'all 0.25s ease',
                 overflow: 'hidden',
@@ -721,29 +863,29 @@ const Sidebar = memo(({
             >
               <span style={{ flexShrink: 0, fontSize: '12px' }}>📤</span>
               <span style={{
-                opacity: isExpanded ? 1 : 0,
-                width: isExpanded ? 'auto' : 0,
+                opacity: showLabels ? 1 : 0,
+                width: showLabels ? 'auto' : 0,
                 overflow: 'hidden',
                 whiteSpace: 'nowrap',
-                transition: isExpanded ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-              }}>Export</span>
+                transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
+              }}>{isMedium ? 'Exp' : 'Export'}</span>
             </button>
 
             <label
               style={{
-                flex: isExpanded ? 1 : 'none',
+                flex: showLabels ? 1 : 'none',
                 minWidth: 0,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: isExpanded ? '4px' : 0,
-                padding: isExpanded ? '6px 8px' : '6px',
+                gap: showLabels ? '4px' : 0,
+                padding: showLabels ? '6px 8px' : '6px',
                 background: 'rgba(50, 50, 80, 0.6)',
                 border: '1px solid rgba(255, 255, 255, 0.1)',
                 borderRadius: '5px',
                 color: '#aaa',
                 cursor: 'pointer',
-                fontSize: '9px',
+                fontSize: isMedium ? '8px' : '9px',
                 fontFamily: FONT_FAMILY,
                 transition: 'all 0.25s ease',
                 overflow: 'hidden',
@@ -760,12 +902,12 @@ const Sidebar = memo(({
             >
               <span style={{ flexShrink: 0, fontSize: '12px' }}>📥</span>
               <span style={{
-                opacity: isExpanded ? 1 : 0,
-                width: isExpanded ? 'auto' : 0,
+                opacity: showLabels ? 1 : 0,
+                width: showLabels ? 'auto' : 0,
                 overflow: 'hidden',
                 whiteSpace: 'nowrap',
-                transition: isExpanded ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-              }}>Import</span>
+                transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
+              }}>{isMedium ? 'Imp' : 'Import'}</span>
               <input
                 type="file"
                 accept=".json"
@@ -776,19 +918,19 @@ const Sidebar = memo(({
 
             <button
               style={{
-                flex: isExpanded ? 1 : 'none',
+                flex: showLabels ? 1 : 'none',
                 minWidth: 0,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: isExpanded ? '4px' : 0,
-                padding: isExpanded ? '6px 8px' : '6px',
+                gap: showLabels ? '4px' : 0,
+                padding: showLabels ? '6px 8px' : '6px',
                 background: 'rgba(90, 60, 50, 0.5)',
                 border: '1px solid rgba(200, 100, 80, 0.3)',
                 borderRadius: '5px',
                 color: '#cc9988',
                 cursor: 'pointer',
-                fontSize: '9px',
+                fontSize: isMedium ? '8px' : '9px',
                 fontFamily: FONT_FAMILY,
                 transition: 'all 0.25s ease',
                 overflow: 'hidden',
@@ -806,27 +948,33 @@ const Sidebar = memo(({
             >
               <span style={{ flexShrink: 0, fontSize: '12px' }}>🔄</span>
               <span style={{
-                opacity: isExpanded ? 1 : 0,
-                width: isExpanded ? 'auto' : 0,
+                opacity: showLabels ? 1 : 0,
+                width: showLabels ? 'auto' : 0,
                 overflow: 'hidden',
                 whiteSpace: 'nowrap',
-                transition: isExpanded ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-              }}>Reset</span>
+                transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
+              }}>{isMedium ? 'Rst' : 'Reset'}</span>
             </button>
           </div>
         )}
       </div>
 
-      {/* Footer with toggle */}
+      {/* Footer with mode toggle */}
       <div style={styles.footer}>
         <button
           style={{
             ...styles.toggleButton,
-            gap: isExpanded ? '8px' : 0,
+            gap: showLabels ? '8px' : 0,
             overflow: 'hidden',
           }}
-          onClick={onToggle}
-          title={isExpanded ? 'Collapse sidebar (Cmd+B)' : 'Expand sidebar (Cmd+B)'}
+          onClick={() => {
+            // Cycle through modes: narrow → medium → wide → narrow
+            const modeOrder = ['narrow', 'medium', 'wide'];
+            const currentIndex = modeOrder.indexOf(sidebarMode);
+            const nextIndex = (currentIndex + 1) % modeOrder.length;
+            setSidebarMode(modeOrder[nextIndex]);
+          }}
+          title={`Switch to ${isNarrow ? 'medium' : isMedium ? 'wide' : 'narrow'} (Cmd+B)`}
           onMouseOver={(e) => {
             e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
             e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
@@ -837,15 +985,15 @@ const Sidebar = memo(({
           }}
         >
           <span style={{ fontSize: '14px', flexShrink: 0 }}>
-            {isExpanded ? '◀' : '▶'}
+            {isNarrow ? '▶' : isMedium ? '▶▶' : '◀'}
           </span>
           <span style={{
-            opacity: isExpanded ? 1 : 0,
-            width: isExpanded ? 'auto' : 0,
+            opacity: showLabels ? 1 : 0,
+            width: showLabels ? 'auto' : 0,
             overflow: 'hidden',
             whiteSpace: 'nowrap',
-            transition: isExpanded ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-          }}>Collapse</span>
+            transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
+          }}>{isMedium ? 'Expand' : 'Collapse'}</span>
         </button>
       </div>
     </div>
