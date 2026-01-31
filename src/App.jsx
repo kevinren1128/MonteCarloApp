@@ -3382,7 +3382,8 @@ function MonteCarloSimulator() {
   // Add position
   const addPosition = () => {
     setPositions(prev => {
-      const newId = Math.max(0, ...prev.map(p => p.id)) + 1;
+      // Use UUID to match Supabase format and avoid NaN issues with mixed ID types
+      const newId = crypto.randomUUID();
       return [...prev, {
         id: newId,
         ticker: '',
@@ -3402,12 +3403,14 @@ function MonteCarloSimulator() {
   // Includes currency info for international stocks
   const addPositionsBatch = useCallback((newPositions) => {
     if (!newPositions || newPositions.length === 0) return;
-    
+
     setPositions(prev => {
-      let nextId = Math.max(0, ...prev.map(p => p.id)) + 1;
-      
+      // Generate unique IDs - handle both numeric and UUID existing IDs
+      // Use crypto.randomUUID() for new positions to match Supabase format
+      const generateId = () => crypto.randomUUID();
+
       const positionsToAdd = newPositions.map(p => ({
-        id: nextId++,
+        id: generateId(),
         ticker: p.ticker.toUpperCase(),
         quantity: p.quantity,
         type: 'Equity',
@@ -3517,13 +3520,7 @@ function MonteCarloSimulator() {
   
   // Remove position - wrapped in useCallback to prevent stale closures
   const removePosition = useCallback((id) => {
-    console.log('[removePosition] Called with id:', id, 'type:', typeof id);
-    setPositions(prev => {
-      console.log('[removePosition] Current positions:', prev.map(p => ({ id: p.id, ticker: p.ticker, idType: typeof p.id })));
-      const filtered = prev.filter(p => p.id !== id);
-      console.log('[removePosition] After filter, count:', filtered.length, '(was:', prev.length, ')');
-      return filtered;
-    });
+    setPositions(prev => prev.filter(p => p.id !== id));
   }, []);
   
   // Update position with percentile constraints
