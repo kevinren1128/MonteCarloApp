@@ -281,7 +281,7 @@ export const pruneCache = (cache, currentTickers) => {
 };
 
 /**
- * Fetch position price data (full or incremental)
+ * Fetch position price data (full or incremental) with parallel requests
  * @param {Array<string>} tickers - Tickers to fetch
  * @param {string} fetchType - 'full', 'incremental', or 'mixed'
  * @param {Object|null} existingCache - Current cache for incremental updates
@@ -294,7 +294,7 @@ export const fetchPositionPriceData = async (tickers, fetchType, existingCache, 
   const today = getTodayEST();
   const total = tickers.length;
 
-  console.log(`[PositionCache] Fetching ${fetchType} data for ${total} positions`);
+  console.log(`[PositionCache] Fetching ${fetchType} data for ${total} positions (parallel)`);
 
   // Start with existing cache data (pruned to current positions)
   const prunedCache = existingCache ? pruneCache(existingCache, tickers) : null;
@@ -306,7 +306,6 @@ export const fetchPositionPriceData = async (tickers, fetchType, existingCache, 
     positions: prunedCache?.positions ? { ...prunedCache.positions } : {},
   };
 
-  let successCount = 0;
   let latestDate = prunedCache?.lastUpdated || '';
 
   // Determine range for incremental fetch
@@ -318,32 +317,46 @@ export const fetchPositionPriceData = async (tickers, fetchType, existingCache, 
     }
   }
 
-  for (let i = 0; i < tickers.length; i++) {
-    const ticker = tickers[i].toUpperCase();
-
-    if (onProgress) {
-      onProgress(i + 1, total, ticker);
-    }
-
-    // Determine fetch range for this ticker
+  // Build fetch tasks
+  const fetchTasks = tickers.map(t => {
+    const ticker = t.toUpperCase();
     let range;
     if (fetchType === 'full') {
-      range = '3y'; // Max timeline option in app is 3 years
+      range = '3y';
     } else if (newTickers.includes(ticker)) {
-      range = '3y'; // Full history for new tickers
+      range = '3y';
     } else {
-      range = incrementalRange; // Incremental for existing
+      range = incrementalRange;
     }
+    return { ticker, range, isNew: newTickers.includes(ticker) };
+  });
 
-    try {
-      const history = await fetchYahooHistory(ticker, range, '1d');
+  // Parallel fetch with concurrency limit
+  const CONCURRENCY = 5; // Fetch 5 at a time
+  let completed = 0;
+  let successCount = 0;
 
-      if (history && history.length > 0) {
+  const processBatch = async (batch) => {
+    const results = await Promise.allSettled(
+      batch.map(async ({ ticker, range, isNew }) => {
+        const history = await fetchYahooHistory(ticker, range, '1d');
+        return { ticker, history, isNew };
+      })
+    );
+
+    for (const result of results) {
+      completed++;
+      if (onProgress) {
+        onProgress(completed, total, result.status === 'fulfilled' ? result.value.ticker : '...');
+      }
+
+      if (result.status === 'fulfilled' && result.value.history?.length > 0) {
+        const { ticker, history, isNew } = result.value;
         const compactData = toCompactFormat(history);
 
         if (compactData.length > 0) {
           // Merge with existing data if we have it
-          if (newCache.positions[ticker] && !newTickers.includes(ticker)) {
+          if (newCache.positions[ticker] && !isNew) {
             newCache.positions[ticker] = mergeData(newCache.positions[ticker], compactData);
           } else {
             newCache.positions[ticker] = compactData;
@@ -358,13 +371,15 @@ export const fetchPositionPriceData = async (tickers, fetchType, existingCache, 
           successCount++;
         }
       }
-    } catch (err) {
-      console.warn(`[PositionCache] Failed to fetch ${ticker}:`, err.message);
-      // Keep existing data for this ticker if we have it
     }
+  };
 
-    // Small delay between requests
-    if (i < tickers.length - 1) {
+  // Process in batches
+  for (let i = 0; i < fetchTasks.length; i += CONCURRENCY) {
+    const batch = fetchTasks.slice(i, i + CONCURRENCY);
+    await processBatch(batch);
+    // Small delay between batches to avoid rate limits
+    if (i + CONCURRENCY < fetchTasks.length) {
       await new Promise(r => setTimeout(r, FETCH_DELAY_MS));
     }
   }
@@ -379,9 +394,12 @@ export const fetchPositionPriceData = async (tickers, fetchType, existingCache, 
  * Main update function - checks if update needed and fetches if so
  * @param {Array<string>} currentTickers - Current portfolio tickers
  * @param {Function} onProgress - Optional progress callback
+ * @param {Object} options - Options { skipIncremental: boolean }
  * @returns {Promise<{cache: Object, updated: boolean, reason: string}>}
  */
-export const updatePositionPriceCache = async (currentTickers, onProgress) => {
+export const updatePositionPriceCache = async (currentTickers, onProgress, options = {}) => {
+  const { skipIncremental = false } = options;
+
   if (!currentTickers || currentTickers.length === 0) {
     console.log('[PositionCache] No tickers provided, skipping update');
     return { cache: null, updated: false, reason: 'No tickers' };
@@ -393,6 +411,17 @@ export const updatePositionPriceCache = async (currentTickers, onProgress) => {
 
   console.log(`[PositionCache] Update check: ${reason} (fetchType=${fetchType})`);
 
+  // If skipIncremental is true, only fetch for truly NEW tickers (not in cache at all)
+  // This makes Load All fast by using cached historical data as-is
+  if (skipIncremental && fetchType === 'incremental') {
+    console.log('[PositionCache] Skipping incremental update (using cached data)');
+    const prunedCache = existingCache ? pruneCache(existingCache, currentTickers) : existingCache;
+    if (prunedCache !== existingCache) {
+      savePositionPriceCache(prunedCache);
+    }
+    return { cache: prunedCache, updated: false, reason: 'Using cached data (incremental skipped)' };
+  }
+
   if (!needsFetch) {
     // Still prune cache to remove old positions
     const prunedCache = existingCache ? pruneCache(existingCache, currentTickers) : existingCache;
@@ -402,10 +431,19 @@ export const updatePositionPriceCache = async (currentTickers, onProgress) => {
     return { cache: prunedCache, updated: false, reason };
   }
 
+  // For mixed mode with skipIncremental, only fetch new tickers
+  let tickersToFetch = currentTickers;
+  let effectiveFetchType = fetchType;
+  if (skipIncremental && fetchType === 'mixed') {
+    tickersToFetch = newTickers;
+    effectiveFetchType = 'full'; // Full history for new tickers only
+    console.log(`[PositionCache] Fetching only ${newTickers.length} new tickers (skipping incremental for ${existingTickers.length} existing)`);
+  }
+
   try {
     const newCache = await fetchPositionPriceData(
-      currentTickers,
-      fetchType,
+      tickersToFetch,
+      effectiveFetchType,
       existingCache,
       { newTickers, existingTickers },
       onProgress

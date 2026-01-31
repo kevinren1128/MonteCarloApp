@@ -1813,19 +1813,19 @@ function MonteCarloSimulator() {
 
     console.log(`🚀 Fetching unified data for ${allTickers.length} tickers (${tickers.length} positions + ${factorETFs.length} factor ETFs)...`);
 
-    // Load persistent position price cache for incremental updates
-    // This avoids fetching 5 years of history for each position on every load
+    // Load persistent position price cache with fast parallel fetching
+    // If cache exists, this only fetches new days (incremental) or new tickers
+    // Parallel requests make this fast even with many positions
     let positionPriceCache = null;
     try {
-      const { cache, updated, reason } = await updatePositionPriceCache(tickers, (current, total, ticker) => {
-        setUnifiedFetchProgress({ current, total: tickers.length, message: `Updating cache: ${ticker}...` });
-      });
+      const { cache, updated, reason } = await updatePositionPriceCache(
+        tickers,
+        (current, total, ticker) => {
+          setUnifiedFetchProgress({ current, total: tickers.length, message: `Updating prices: ${ticker}...` });
+        }
+      );
       positionPriceCache = cache;
-      if (updated) {
-        console.log(`💾 Position price cache updated: ${reason}`);
-      } else {
-        console.log(`💾 Position price cache: ${reason}`);
-      }
+      console.log(`💾 Position price cache: ${reason}${updated ? ' (updated)' : ''}`);
     } catch (err) {
       console.warn('[PositionCache] Failed to update cache:', err);
     }
