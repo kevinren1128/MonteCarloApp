@@ -4289,12 +4289,7 @@ function MonteCarloSimulator() {
     // For international stocks with timestamps, use date alignment and test lags
     const hasSpyTimestamps = spyData.timestamps?.length > 0;
     const hasPosTimestamps = posTimestamps?.length > 0;
-    
-    // Debug: Log why we're taking or not taking the international path
-    if (isInternational) {
-      console.log(`   📊 International factor analysis: hasPosTs=${hasPosTimestamps} (${posTimestamps?.length || 0}), hasSpyTs=${hasSpyTimestamps} (${spyData.timestamps?.length || 0})`);
-    }
-    
+
     if (isInternational && hasPosTimestamps && hasSpyTimestamps) {
       const lags = [-1, 0, 1];
       let bestResult = { rSquared: -1, lag: 0 };
@@ -4363,14 +4358,10 @@ function MonteCarloSimulator() {
           
           const betas = { MKT: betaMkt };
           
-          // Debug: Check if factor spreads have timestamps
-          console.log(`   📊 ${isInternational ? 'Intl' : 'US'} factor timestamps: SMB=${smbData?.timestamps?.length || 0}, HML=${hmlData?.timestamps?.length || 0}, MOM=${momData?.timestamps?.length || 0}`);
-          
           // Compute SMB, HML, MOM betas using same date alignment
           // These factors use SPY's timestamps since they're US ETF spreads
           const computeBetaOnResiduals = (factorReturns, factorTimestamps, residuals, posTs) => {
             if (!factorReturns || factorReturns.length < 30 || !factorTimestamps) {
-              console.log(`   ⚠️ Skipping factor: returns=${factorReturns?.length || 0}, timestamps=${factorTimestamps?.length || 0}`);
               return 0;
             }
             
@@ -4425,8 +4416,6 @@ function MonteCarloSimulator() {
           if (smbData?.returns && smbData?.timestamps) betas.SMB = computeBetaOnResiduals(smbData.returns, smbData.timestamps, residualsAfterMkt, posTimestampsAligned);
           if (hmlData?.returns && hmlData?.timestamps) betas.HML = computeBetaOnResiduals(hmlData.returns, hmlData.timestamps, residualsAfterMkt, posTimestampsAligned);
           if (momData?.returns && momData?.timestamps) betas.MOM = computeBetaOnResiduals(momData.returns, momData.timestamps, residualsAfterMkt, posTimestampsAligned);
-          
-          console.log(`   📊 Computed betas: MKT=${betaMkt.toFixed(2)}, SMB=${(betas.SMB || 0).toFixed(2)}, HML=${(betas.HML || 0).toFixed(2)}, MOM=${(betas.MOM || 0).toFixed(2)}`);
           
           const residualVol = Math.sqrt(ssResid / (weights ? 1 : len)) * Math.sqrt(252);
           
@@ -4563,55 +4552,45 @@ function MonteCarloSimulator() {
   const detectThematicMatch = useCallback((positionReturns, posTimestamps, factorReturnsMap, excludeList = ['SPY'], ewmaLambda = 1.0, isInternational = false) => {
     // Test against all thematic ETFs
     const thematicETFTickers = Object.keys(THEMATIC_ETFS);
-    
+
     let bestMatch = { ticker: null, beta: 0, rSquared: 0, name: 'None', lag: 0 };
-    
+
+    // OPTIMIZATION: Only test lags for international stocks (US stocks are same timezone)
+    const lags = isInternational ? [-1, 0, 1] : [0];
+
     for (const etfTicker of thematicETFTickers) {
       if (excludeList.includes(etfTicker)) continue;
-      
+
       const etfData = factorReturnsMap[etfTicker];
       if (!etfData?.returns || etfData.returns.length < 30) continue;
-      
+
       const etfReturns = etfData.returns;
       const etfTimestamps = etfData.timestamps;
-      
-      // Try lag -1, 0, +1 and pick the best R²
-      const lags = [-1, 0, 1];
+
       let bestLagResult = { rSquared: 0, lag: 0, beta: 0, correlation: 0 };
-      
+
       for (const lag of lags) {
         let result;
-        
+
         if (isInternational && posTimestamps?.length > 0 && etfTimestamps?.length > 0) {
           // Use date alignment for international stocks
-          const { posAligned, etfAligned, matchedDates } = alignReturnsByDate(
+          const { posAligned, etfAligned } = alignReturnsByDate(
             positionReturns, posTimestamps, etfReturns, etfTimestamps, lag
           );
           result = computeCorrelationFromAligned(posAligned, etfAligned, ewmaLambda);
         } else {
-          // Simple index alignment for US stocks (faster)
-          let y, x;
-          if (lag === 0) {
-            const len = Math.min(positionReturns.length, etfReturns.length);
-            y = positionReturns.slice(-len);
-            x = etfReturns.slice(-len);
-          } else if (lag === -1) {
-            const len = Math.min(positionReturns.length - 1, etfReturns.length - 1);
-            y = positionReturns.slice(-len);
-            x = etfReturns.slice(-(len + 1), -1);
-          } else {
-            const len = Math.min(positionReturns.length - 1, etfReturns.length - 1);
-            y = positionReturns.slice(-(len + 1), -1);
-            x = etfReturns.slice(-len);
-          }
+          // Simple index alignment for US stocks (faster, no lag needed)
+          const len = Math.min(positionReturns.length, etfReturns.length);
+          const y = positionReturns.slice(-len);
+          const x = etfReturns.slice(-len);
           result = computeCorrelationFromAligned(y, x, ewmaLambda);
         }
-        
+
         if (result.rSquared > bestLagResult.rSquared) {
           bestLagResult = { ...result, lag };
         }
       }
-      
+
       // Update best match if this ETF (at its optimal lag) has higher R²
       // Use 10% threshold to catch international stocks with some noise
       if (bestLagResult.rSquared > bestMatch.rSquared && bestLagResult.rSquared > 0.10) {
@@ -4624,9 +4603,12 @@ function MonteCarloSimulator() {
           name: THEMATIC_ETFS[etfTicker]?.name || etfTicker,
           category: THEMATIC_ETFS[etfTicker]?.category || 'unknown',
         };
+
+        // OPTIMIZATION: Early exit if we found a very strong match (R² > 60%)
+        if (bestMatch.rSquared > 0.60) break;
       }
     }
-    
+
     return bestMatch;
   }, [alignReturnsByDate, computeCorrelationFromAligned]);
   
@@ -4695,37 +4677,25 @@ function MonteCarloSimulator() {
       const isInternational = ticker.includes('.') && !ticker.endsWith('.US');
       const rawPosTimestamps = mktData[ticker]?.timestamps;
       const posTimestamps = rawPosTimestamps?.slice(1) || [];
-      
-      // Debug logging for international stocks
-      if (isInternational) {
-        const spyHasTimestamps = fData['SPY']?.timestamps?.length > 0;
-        const posSampleTs = posTimestamps[0] ? new Date(posTimestamps[0]).toISOString().slice(0, 10) : 'none';
-        const spySampleTs = fData['SPY']?.timestamps?.[0] ? new Date(fData['SPY'].timestamps[0]).toISOString().slice(0, 10) : 'none';
-        console.log(`🌍 ${ticker}: isIntl=true, rawTs=${rawPosTimestamps?.length || 0}, posTs=${posTimestamps.length} (${posSampleTs}), spyTs=${spyHasTimestamps ? fData['SPY'].timestamps.length : 0} (${spySampleTs})`);
-      }
-      
+
       const factorBetas = computeFactorBetas(returns, posTimestamps, fData, ewmaLambda, isInternational);
-      
-      if (isInternational && factorBetas.lag !== 0) {
-        console.log(`🌍 ${ticker}: Best factor R² at lag ${factorBetas.lag} (R²=${(factorBetas.rSquared*100).toFixed(1)}%)`);
-      }
       
       // Detect thematic match (use override if set)
       let thematicMatch;
       const override = thematicOverrides[pos.id];
       
       if (override && fData[override]) {
-        // User override - compute beta to the specified ETF using DATE ALIGNMENT
+        // User override - compute beta to the specified ETF
         const etfReturns = fData[override].returns;
         const etfTimestamps = fData[override].timestamps;
-        
-        // For international stocks, use date alignment; for US, use simple index alignment
-        const lagsToTry = [-1, 0, 1];
+
+        // OPTIMIZATION: Only test lags for international stocks
+        const lagsToTry = isInternational ? [-1, 0, 1] : [0];
         let bestOverrideResult = { rSquared: -1, lag: 0, beta: 0, matchedDates: 0 };
-        
+
         for (const testLag of lagsToTry) {
           let result;
-          
+
           if (isInternational && posTimestamps.length > 0 && etfTimestamps?.length > 0) {
             // Use date alignment for international stocks
             const { posAligned, etfAligned, matchedDates } = alignReturnsByDate(
@@ -4734,29 +4704,19 @@ function MonteCarloSimulator() {
             result = computeCorrelationFromAligned(posAligned, etfAligned, ewmaLambda);
             result.matchedDates = matchedDates;
           } else {
-            // Simple index alignment for US stocks
-            let y, x;
-            const baseLen = Math.min(returns.length, etfReturns.length) - 1;
-            
-            if (testLag === 0) {
-              y = returns.slice(-baseLen);
-              x = etfReturns.slice(-baseLen);
-            } else if (testLag === -1) {
-              y = returns.slice(-baseLen);
-              x = etfReturns.slice(-(baseLen + 1), -1);
-            } else {
-              y = returns.slice(-(baseLen + 1), -1);
-              x = etfReturns.slice(-baseLen);
-            }
+            // Simple index alignment for US stocks (no lag needed)
+            const len = Math.min(returns.length, etfReturns.length);
+            const y = returns.slice(-len);
+            const x = etfReturns.slice(-len);
             result = computeCorrelationFromAligned(y, x, ewmaLambda);
             result.matchedDates = y.length;
           }
-          
+
           if (result.rSquared > bestOverrideResult.rSquared) {
             bestOverrideResult = { ...result, lag: testLag };
           }
         }
-        
+
         thematicMatch = {
           ticker: override,
           beta: bestOverrideResult.beta,

@@ -224,7 +224,7 @@ const mergeData = (existing, newData) => {
 };
 
 /**
- * Fetch factor ETF data (full or incremental)
+ * Fetch factor ETF data (full or incremental) with parallel requests
  * @param {string} fetchType - 'full' or 'incremental'
  * @param {Object|null} existingCache - Current cache for incremental updates
  * @param {Function} onProgress - Progress callback (current, total, etf)
@@ -242,7 +242,7 @@ export const fetchFactorETFData = async (fetchType, existingCache, onProgress) =
     range = getRangeForDays(gapDays + 5); // Add buffer
   }
 
-  console.log(`[FactorCache] Fetching ${fetchType} data with range=${range} for ${total} ETFs`);
+  console.log(`[FactorCache] Fetching ${fetchType} data with range=${range} for ${total} ETFs (parallel)`);
 
   const newCache = {
     version: CACHE_VERSION,
@@ -251,20 +251,32 @@ export const fetchFactorETFData = async (fetchType, existingCache, onProgress) =
     etfs: existingCache?.etfs ? { ...existingCache.etfs } : {},
   };
 
-  let successCount = 0;
   let latestDate = existingCache?.lastUpdated || '';
 
-  for (let i = 0; i < etfs.length; i++) {
-    const etf = etfs[i];
+  // Build fetch tasks
+  const fetchTasks = etfs.map(etf => ({ etf, range }));
 
-    if (onProgress) {
-      onProgress(i + 1, total, etf);
-    }
+  // Parallel fetch with concurrency limit
+  const CONCURRENCY = 5; // Fetch 5 at a time
+  let completed = 0;
+  let successCount = 0;
 
-    try {
-      const history = await fetchYahooHistory(etf, range, '1d');
+  const processBatch = async (batch) => {
+    const results = await Promise.allSettled(
+      batch.map(async ({ etf, range: fetchRange }) => {
+        const history = await fetchYahooHistory(etf, fetchRange, '1d');
+        return { etf, history };
+      })
+    );
 
-      if (history && history.length > 0) {
+    for (const result of results) {
+      completed++;
+      if (onProgress) {
+        onProgress(completed, total, result.status === 'fulfilled' ? result.value.etf : '...');
+      }
+
+      if (result.status === 'fulfilled' && result.value.history?.length > 0) {
+        const { etf, history } = result.value;
         const compactData = toCompactFormat(history);
 
         if (compactData.length > 0) {
@@ -284,13 +296,15 @@ export const fetchFactorETFData = async (fetchType, existingCache, onProgress) =
           successCount++;
         }
       }
-    } catch (err) {
-      console.warn(`[FactorCache] Failed to fetch ${etf}:`, err.message);
-      // Keep existing data for this ETF if we have it
     }
+  };
 
-    // Small delay between requests to avoid rate limiting
-    if (i < etfs.length - 1) {
+  // Process in batches
+  for (let i = 0; i < fetchTasks.length; i += CONCURRENCY) {
+    const batch = fetchTasks.slice(i, i + CONCURRENCY);
+    await processBatch(batch);
+    // Small delay between batches to avoid rate limits
+    if (i + CONCURRENCY < fetchTasks.length) {
       await new Promise(r => setTimeout(r, FETCH_DELAY_MS));
     }
   }
