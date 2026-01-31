@@ -11,3 +11,5 @@ export { UIProvider, useUI } from './UIContext';
 export { PortfolioProvider, usePortfolio } from './PortfolioContext';
 export { MarketDataProvider, useMarketData } from './MarketDataContext';
 export { SimulationProvider, useSimulation } from './SimulationContext';
+export { AppStateProvider, useAppState } from './AppStateContext';
+export { AllProviders } from './AllProviders';
