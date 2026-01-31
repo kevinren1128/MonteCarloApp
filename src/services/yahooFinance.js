@@ -12,37 +12,35 @@
  */
 
 // CORS proxy configuration - multiple fallbacks for reliability
-// Updated 2025: Using more reliable proxies
+// Updated Jan 2026: allorigins.win is the most reliable free option
 const CORS_PROXIES = [
-  {
-    name: 'corsproxy-io',
-    buildUrl: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-    parseResponse: async (response) => response.json(),
-  },
-  {
-    name: 'cors-proxy-htmldriven',
-    buildUrl: (url) => `https://cors-proxy.htmldriven.com/?url=${encodeURIComponent(url)}`,
-    parseResponse: async (response) => {
-      const data = await response.json();
-      return data.body ? JSON.parse(data.body) : null;
-    },
-  },
-  {
-    name: 'api-codetabs',
-    buildUrl: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-    parseResponse: async (response) => response.json(),
-  },
   {
     name: 'allorigins-raw',
     buildUrl: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    parseResponse: async (response) => response.json(),
+    parseResponse: async (response) => {
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        console.warn('allorigins-raw returned non-JSON:', text.slice(0, 100));
+        return null;
+      }
+    },
   },
   {
     name: 'allorigins',
     buildUrl: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
     parseResponse: async (response) => {
       const data = await response.json();
-      return data.contents ? JSON.parse(data.contents) : null;
+      if (data.contents) {
+        try {
+          return JSON.parse(data.contents);
+        } catch (e) {
+          console.warn('allorigins contents not valid JSON');
+          return null;
+        }
+      }
+      return null;
     },
   },
 ];
@@ -76,12 +74,13 @@ const getSortedProxies = () => {
  * Fetch data from Yahoo Finance with CORS proxy fallback
  * Tries proxies sequentially, preferring ones with better success rates
  * @param {string} url - Yahoo Finance API URL
- * @param {number} timeout - Timeout in ms per proxy (default: 10000)
+ * @param {number} timeout - Timeout in ms per proxy (default: 15000)
  * @returns {Promise<Object|null>} Parsed JSON response or null on failure
  */
-export const fetchYahooData = async (url, timeout = 10000) => {
+export const fetchYahooData = async (url, timeout = 15000) => {
   // Try each proxy sequentially, sorted by success rate
   const sortedProxies = getSortedProxies();
+  const errors = [];
 
   for (const proxy of sortedProxies) {
     const controller = new AbortController();
@@ -99,18 +98,24 @@ export const fetchYahooData = async (url, timeout = 10000) => {
           proxyStats[proxy.name].successes++;
           return data;
         }
+        errors.push(`${proxy.name}: empty response`);
+      } else {
+        errors.push(`${proxy.name}: HTTP ${response.status}`);
       }
-      // Response not ok, track failure and try next proxy
+      // Response not ok or empty, track failure and try next proxy
       proxyStats[proxy.name].failures++;
     } catch (e) {
       clearTimeout(timeoutId);
+      const errorMsg = e.name === 'AbortError' ? 'timeout' : e.message;
+      errors.push(`${proxy.name}: ${errorMsg}`);
       // Request failed, track and try next proxy
       proxyStats[proxy.name].failures++;
     }
   }
 
-  // All proxies failed
-  console.warn('All CORS proxies failed for:', url.slice(0, 80) + '...');
+  // All proxies failed - log details
+  const symbol = url.match(/chart\/([^?]+)/)?.[1] || url.slice(0, 50);
+  console.warn(`Yahoo Finance fetch failed for ${symbol}:`, errors.join(', '));
   return null;
 };
 
