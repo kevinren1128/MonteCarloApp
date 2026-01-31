@@ -17,8 +17,8 @@ const TABS = [
   { id: 'consensus', label: 'Consensus', icon: '📋', shortcut: '2' },
   { id: 'distributions', label: 'Distributions', icon: '📈', shortcut: '3' },
   { id: 'correlation', label: 'Correlation', icon: '🔗', shortcut: '4' },
-  { id: 'factors', label: 'Factors', icon: '⚡', shortcut: '5' },
-  { id: 'simulation', label: 'Simulation', icon: '🎲', shortcut: '6' },
+  { id: 'simulation', label: 'Simulation', icon: '🎲', shortcut: '5' },
+  { id: 'factors', label: 'Factors', icon: '⚡', shortcut: '6' },
   { id: 'optimize', label: 'Optimize', icon: '🎯', shortcut: '7' },
   { id: 'export', label: 'Export', icon: '📄', shortcut: '8' },
 ];
