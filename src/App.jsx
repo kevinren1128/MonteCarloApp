@@ -1617,7 +1617,13 @@ function MonteCarloSimulator() {
   const lastSavedPositionsRef = useRef(null);
 
   useEffect(() => {
+    console.log('[App] Position sync effect triggered:', {
+      isAuthenticated: authState.isAuthenticated,
+      positionsCount: positions?.length || 0,
+    });
+
     if (!authState.isAuthenticated || !positions || positions.length === 0) {
+      console.log('[App] Skipping sync - not authenticated or no positions');
       return;
     }
 
@@ -1627,10 +1633,12 @@ function MonteCarloSimulator() {
     })));
 
     if (positionsKey === lastSavedPositionsRef.current) {
+      console.log('[App] Skipping sync - positions unchanged');
       return;
     }
     lastSavedPositionsRef.current = positionsKey;
 
+    console.log('[App] 📤 Triggering position save to server...');
     // Debounced save
     savePositionsToServer(positions, cashBalance);
   }, [authState.isAuthenticated, positions, cashBalance, savePositionsToServer]);

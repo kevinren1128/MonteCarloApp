@@ -212,23 +212,36 @@ export async function fetchAllData() {
  * Save positions with distribution parameters
  */
 export async function savePositions(positions, cashBalance = 0) {
-  const { portfolioId, error: idError } = await getOrCreatePortfolioId();
+  console.log('[PortfolioService] savePositions called with', positions?.length || 0, 'positions');
+
+  const { portfolioId, userId, error: idError } = await getOrCreatePortfolioId();
   if (idError || !portfolioId) {
+    console.error('[PortfolioService] Failed to get/create portfolio:', idError);
     return { success: false, error: idError };
   }
 
+  console.log('[PortfolioService] Using portfolioId:', portfolioId, 'userId:', userId);
+
   try {
     // Update cash balance
-    await supabase
+    const { error: cashError } = await supabase
       .from('portfolios')
       .update({ cash_balance: cashBalance })
       .eq('id', portfolioId);
 
+    if (cashError) {
+      console.error('[PortfolioService] Cash balance update error:', cashError);
+    }
+
     // Delete existing positions
-    await supabase
+    const { error: deleteError } = await supabase
       .from('positions')
       .delete()
       .eq('portfolio_id', portfolioId);
+
+    if (deleteError) {
+      console.error('[PortfolioService] Delete positions error:', deleteError);
+    }
 
     // Insert new positions
     if (positions && positions.length > 0) {
@@ -246,20 +259,25 @@ export async function savePositions(positions, cashBalance = 0) {
         p95: p.p95,
       }));
 
-      const { error: insertError } = await supabase
+      console.log('[PortfolioService] Inserting positions:', positionsToInsert);
+
+      const { data: insertedData, error: insertError } = await supabase
         .from('positions')
-        .insert(positionsToInsert);
+        .insert(positionsToInsert)
+        .select();
 
       if (insertError) {
-        console.error('[PortfolioService] Save positions error:', insertError);
+        console.error('[PortfolioService] Insert positions error:', insertError);
         return { success: false, error: insertError };
       }
+
+      console.log('[PortfolioService] Successfully inserted:', insertedData?.length || 0, 'positions');
     }
 
-    console.log('[PortfolioService] Saved', positions?.length || 0, 'positions');
+    console.log('[PortfolioService] ✅ Saved', positions?.length || 0, 'positions successfully');
     return { success: true, error: null };
   } catch (error) {
-    console.error('[PortfolioService] savePositions error:', error);
+    console.error('[PortfolioService] savePositions exception:', error);
     return { success: false, error };
   }
 }
