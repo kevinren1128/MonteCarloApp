@@ -6327,6 +6327,7 @@ function MonteCarloSimulator() {
               localStorage.removeItem(STORAGE_KEY);
               localStorage.removeItem(UNIFIED_CACHE_KEY);
               localStorage.removeItem(FACTOR_CACHE_KEY);
+              localStorage.removeItem('monte-carlo-factor-etf-prices-v1'); // Persistent factor cache
               window.location.reload();
             },
           });

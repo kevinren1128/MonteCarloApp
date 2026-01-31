@@ -720,14 +720,22 @@ export const UNIFIED_CACHE_MAX_AGE = 4 * 60 * 60 * 1000; // 4 hours
 // ============================================
 
 /**
- * LocalStorage key for factor ETF data cache
+ * LocalStorage key for factor ETF data cache (legacy - 24hr expiry)
+ * @deprecated Use FACTOR_ETF_PRICES_CACHE_KEY for persistent cache
  * @type {string}
  */
 export const FACTOR_CACHE_KEY = 'monte-carlo-factor-etf-data-v1';
 
 /**
- * Maximum age for factor cache (24 hours in milliseconds)
- * Factor ETFs are less volatile so cache longer
+ * Maximum age for legacy factor cache (24 hours in milliseconds)
+ * @deprecated Use persistent cache in factorETFCache.js instead
  * @type {number}
  */
 export const FACTOR_CACHE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * LocalStorage key for persistent factor ETF price cache
+ * This cache stores raw price data and updates incrementally (only new days)
+ * @type {string}
+ */
+export const FACTOR_ETF_PRICES_CACHE_KEY = 'monte-carlo-factor-etf-prices-v1';

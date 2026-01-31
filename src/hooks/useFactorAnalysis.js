@@ -1,4 +1,4 @@
-import { useCallback, useContext, useState } from 'react';
+import { useCallback, useContext, useState, useEffect, useRef } from 'react';
 import { MarketDataContext } from '../contexts/MarketDataContext';
 import { PortfolioContext } from '../contexts/PortfolioContext';
 import { SimulationContext } from '../contexts/SimulationContext';
@@ -7,9 +7,13 @@ import { toast } from '../components/common';
 // Utils
 import { ALL_FACTOR_ETFS, THEMATIC_ETFS } from '../utils/factorDefinitions';
 
-// Cache
-const FACTOR_CACHE_KEY = 'mc-factor-data';
-const FACTOR_CACHE_MAX_AGE = 24 * 3600 * 1000; // 24 hours
+// Persistent price cache service
+import {
+  loadFactorETFCache,
+  updateFactorETFCache,
+  getCachedReturns,
+  getCacheStats,
+} from '../services/factorETFCache';
 
 /**
  * useFactorAnalysis - Custom hook for factor analysis
@@ -24,8 +28,10 @@ export function useFactorAnalysis() {
   const { unifiedMarketData, fetchYahooData } = useContext(MarketDataContext);
   const { positions, portfolioValue, weights } = useContext(PortfolioContext);
   const { historyTimeline, useEwma, factorData, setFactorData, factorAnalysis, setFactorAnalysis } = useContext(SimulationContext);
-  
+
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [cacheUpdateStatus, setCacheUpdateStatus] = useState(null); // 'updating', 'ready', 'error'
+  const hasInitializedCache = useRef(false);
 
   /**
    * Helper: Align returns by calendar date (for international stocks)
@@ -115,159 +121,180 @@ export function useFactorAnalysis() {
   }, []);
 
   /**
-   * Fetch factor ETF data
+   * Build factor data object from cached returns
+   * Includes computing factor spreads (SMB, HML, MOM, etc.)
+   */
+  const buildFactorDataFromReturns = useCallback((cachedReturns) => {
+    if (!cachedReturns || Object.keys(cachedReturns).length === 0) {
+      return null;
+    }
+
+    const newFactorData = {};
+
+    // Convert returns arrays to the expected format
+    for (const [ticker, returns] of Object.entries(cachedReturns)) {
+      if (returns && returns.length > 50) {
+        const totalReturn = returns.reduce((acc, r) => acc * (1 + r), 1) - 1;
+        newFactorData[ticker] = {
+          returns,
+          timestamps: [], // Timestamps not needed for correlation analysis
+          totalReturn,
+        };
+      }
+    }
+
+    // Compute factor spreads
+    const spy = newFactorData['SPY']?.returns || [];
+    if (spy.length > 0) {
+      // SMB: Small minus Big (IWM - SPY)
+      const iwm = newFactorData['IWM']?.returns || [];
+      if (iwm.length === spy.length) {
+        newFactorData['SMB'] = {
+          returns: spy.map((s, i) => (iwm[i] || 0) - s),
+          timestamps: [],
+          totalReturn: (newFactorData['IWM']?.totalReturn || 0) - (newFactorData['SPY']?.totalReturn || 0),
+          name: 'Size (Small-Big)',
+        };
+      }
+
+      // HML: High minus Low (IWD - IWF)
+      const iwd = newFactorData['IWD']?.returns || [];
+      const iwf = newFactorData['IWF']?.returns || [];
+      if (iwd.length === iwf.length && iwd.length > 0) {
+        newFactorData['HML'] = {
+          returns: iwd.map((v, i) => v - (iwf[i] || 0)),
+          timestamps: [],
+          totalReturn: (newFactorData['IWD']?.totalReturn || 0) - (newFactorData['IWF']?.totalReturn || 0),
+          name: 'Value (High-Low)',
+        };
+      }
+
+      // MOM: Momentum (MTUM - SPY)
+      const mtum = newFactorData['MTUM']?.returns || [];
+      if (mtum.length === spy.length) {
+        newFactorData['MOM'] = {
+          returns: spy.map((s, i) => (mtum[i] || 0) - s),
+          timestamps: [],
+          totalReturn: (newFactorData['MTUM']?.totalReturn || 0) - (newFactorData['SPY']?.totalReturn || 0),
+          name: 'Momentum',
+        };
+      }
+
+      // QUAL: Quality (QUAL - SPY)
+      const qual = newFactorData['QUAL']?.returns || [];
+      if (qual.length === spy.length) {
+        newFactorData['QUAL_FACTOR'] = {
+          returns: spy.map((s, i) => (qual[i] || 0) - s),
+          timestamps: [],
+          totalReturn: (newFactorData['QUAL']?.totalReturn || 0) - (newFactorData['SPY']?.totalReturn || 0),
+          name: 'Quality',
+        };
+      }
+
+      // LVOL: Low Volatility (SPLV - SPY)
+      const splv = newFactorData['SPLV']?.returns || [];
+      if (splv.length === spy.length) {
+        newFactorData['LVOL'] = {
+          returns: spy.map((s, i) => (splv[i] || 0) - s),
+          timestamps: [],
+          totalReturn: (newFactorData['SPLV']?.totalReturn || 0) - (newFactorData['SPY']?.totalReturn || 0),
+          name: 'Low Volatility',
+        };
+      }
+    }
+
+    return newFactorData;
+  }, []);
+
+  /**
+   * Initialize and update the persistent factor ETF cache
+   * Called automatically on mount and can be triggered manually
+   */
+  const initializeFactorCache = useCallback(async (forceRefresh = false) => {
+    // Prevent multiple simultaneous initializations
+    if (cacheUpdateStatus === 'updating') {
+      console.log('[FactorCache] Update already in progress');
+      return null;
+    }
+
+    setCacheUpdateStatus('updating');
+
+    try {
+      // First, try to use existing cache immediately for fast startup
+      const existingCache = loadFactorETFCache();
+      if (existingCache && !forceRefresh) {
+        const cachedReturns = getCachedReturns(existingCache, historyTimeline);
+        if (cachedReturns && Object.keys(cachedReturns).length > 5) {
+          const factorDataFromCache = buildFactorDataFromReturns(cachedReturns);
+          if (factorDataFromCache) {
+            console.log('📊 Using cached factor data (instant load)');
+            setFactorData(factorDataFromCache);
+          }
+        }
+      }
+
+      // Then update the cache in background (fetches only new days)
+      console.log('📊 Checking for factor ETF updates...');
+      const { cache, updated, reason } = await updateFactorETFCache((current, total, etf) => {
+        // Progress callback - could be used for UI feedback
+        if (current % 10 === 0 || current === total) {
+          console.log(`[FactorCache] Progress: ${current}/${total} (${etf})`);
+        }
+      });
+
+      if (cache) {
+        const cachedReturns = getCachedReturns(cache, historyTimeline);
+        const factorDataFromCache = buildFactorDataFromReturns(cachedReturns);
+
+        if (factorDataFromCache && Object.keys(factorDataFromCache).length > 5) {
+          setFactorData(factorDataFromCache);
+          setCacheUpdateStatus('ready');
+
+          const stats = getCacheStats();
+          console.log(`✅ Factor cache ready: ${stats.etfCount} ETFs, ${stats.dataPoints} days, ${stats.sizeKB} KB`);
+          console.log(`   Last updated: ${stats.lastUpdated}, Updated now: ${updated}`);
+
+          return factorDataFromCache;
+        }
+      }
+
+      setCacheUpdateStatus('error');
+      console.warn('Factor cache initialization failed');
+      return null;
+    } catch (err) {
+      console.error('Factor cache initialization error:', err);
+      setCacheUpdateStatus('error');
+      return null;
+    }
+  }, [historyTimeline, setFactorData, cacheUpdateStatus, buildFactorDataFromReturns]);
+
+  /**
+   * Auto-initialize cache on mount
+   */
+  useEffect(() => {
+    if (!hasInitializedCache.current) {
+      hasInitializedCache.current = true;
+      // Small delay to not block initial render
+      const timer = setTimeout(() => {
+        initializeFactorCache();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [initializeFactorCache]);
+
+  /**
+   * Fetch factor ETF data (legacy API - now uses persistent cache)
    */
   const fetchFactorData = useCallback(async (marketData = null, forceRefresh = false) => {
     setIsAnalyzing(true);
 
-    // Check cache first
-    if (!forceRefresh) {
-      try {
-        const cached = localStorage.getItem(FACTOR_CACHE_KEY);
-        if (cached) {
-          const { data: cachedFactorData, timestamp, timeline } = JSON.parse(cached);
-          const isFresh = Date.now() - timestamp < FACTOR_CACHE_MAX_AGE;
-          const sameTimeline = timeline === historyTimeline;
-
-          if (isFresh && sameTimeline && cachedFactorData && Object.keys(cachedFactorData).length > 5) {
-            console.log(`📊 Using cached factor data`);
-            setFactorData(cachedFactorData);
-            setIsAnalyzing(false);
-            return cachedFactorData;
-          }
-        }
-      } catch (e) {
-        console.warn('Factor cache read failed:', e);
-      }
-    }
-
-    console.log('📊 Fetching factor ETF data...');
-
     try {
-      const targetDays = {
-        '6mo': 126,
-        '1y': 252,
-        '2y': 504,
-        '3y': 756,
-      }[historyTimeline] || 252;
-
-      // Fetch all factor ETFs in parallel
-      const results = await Promise.all(
-        ALL_FACTOR_ETFS.map(async (ticker) => {
-          try {
-            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=3y`;
-            const data = await fetchYahooData(url);
-
-            if (data?.chart?.result?.[0]) {
-              const result = data.chart.result[0];
-              const adjCloses = result.indicators?.adjclose?.[0]?.adjclose ||
-                               result.indicators?.quote?.[0]?.close || [];
-              const timestamps = result.timestamp || [];
-
-              const returns = [];
-              const returnTimestamps = [];
-              for (let i = 1; i < adjCloses.length; i++) {
-                if (adjCloses[i] && adjCloses[i-1] && adjCloses[i-1] !== 0) {
-                  returns.push((adjCloses[i] - adjCloses[i-1]) / adjCloses[i-1]);
-                  if (timestamps[i]) {
-                    returnTimestamps.push(timestamps[i] * 1000);
-                  }
-                }
-              }
-
-              const trimmedReturns = returns.slice(-targetDays);
-              const trimmedTimestamps = returnTimestamps.slice(-targetDays);
-              const totalReturn = trimmedReturns.reduce((acc, r) => acc * (1 + r), 1) - 1;
-
-              return {
-                ticker,
-                returns: trimmedReturns,
-                timestamps: trimmedTimestamps,
-                totalReturn,
-                success: true
-              };
-            }
-            return { ticker, success: false };
-          } catch (e) {
-            console.warn(`Failed to fetch ${ticker}:`, e.message);
-            return { ticker, success: false };
-          }
-        })
-      );
-      
-      // Build factor data object
-      const newFactorData = {};
-      results.forEach(r => {
-        if (r.success && r.returns.length > 50) {
-          newFactorData[r.ticker] = {
-            returns: r.returns,
-            timestamps: r.timestamps,
-            totalReturn: r.totalReturn,
-          };
-        }
-      });
-      
-      // Compute factor spreads
-      const spy = newFactorData['SPY']?.returns || [];
-      const spyTimestamps = newFactorData['SPY']?.timestamps || [];
-      if (spy.length > 0) {
-        const iwm = newFactorData['IWM']?.returns || [];
-        if (iwm.length === spy.length) {
-          newFactorData['SMB'] = {
-            returns: spy.map((s, i) => (iwm[i] || 0) - s),
-            timestamps: spyTimestamps,
-            totalReturn: (newFactorData['IWM']?.totalReturn || 0) - (newFactorData['SPY']?.totalReturn || 0),
-            name: 'Size (Small-Big)',
-          };
-        }
-        
-        const iwd = newFactorData['IWD']?.returns || [];
-        const iwf = newFactorData['IWF']?.returns || [];
-        if (iwd.length === iwf.length && iwd.length > 0) {
-          newFactorData['HML'] = {
-            returns: iwd.map((v, i) => v - (iwf[i] || 0)),
-            timestamps: spyTimestamps.slice(0, iwd.length),
-            totalReturn: (newFactorData['IWD']?.totalReturn || 0) - (newFactorData['IWF']?.totalReturn || 0),
-            name: 'Value (High-Low)',
-          };
-        }
-        
-        // Add other factor spreads (MOM, QUAL, LVOL)
-        const mtum = newFactorData['MTUM']?.returns || [];
-        if (mtum.length === spy.length) {
-          newFactorData['MOM'] = {
-            returns: spy.map((s, i) => (mtum[i] || 0) - s),
-            timestamps: spyTimestamps,
-            totalReturn: (newFactorData['MTUM']?.totalReturn || 0) - (newFactorData['SPY']?.totalReturn || 0),
-            name: 'Momentum',
-          };
-        }
-      }
-      
-      console.log(`✅ Fetched ${Object.keys(newFactorData).length} factor ETFs`);
-      setFactorData(newFactorData);
-
-      // Cache
-      try {
-        const cachePayload = JSON.stringify({
-          data: newFactorData,
-          timestamp: Date.now(),
-          timeline: historyTimeline,
-        });
-        localStorage.setItem(FACTOR_CACHE_KEY, cachePayload);
-        console.log(`💾 Factor data cached`);
-      } catch (e) {
-        console.warn('Failed to cache factor data:', e);
-      }
-
-      return newFactorData;
-    } catch (e) {
-      console.error('Factor data fetch failed:', e);
-      return null;
+      const result = await initializeFactorCache(forceRefresh);
+      return result;
     } finally {
       setIsAnalyzing(false);
     }
-  }, [historyTimeline, setFactorData, fetchYahooData]);
+  }, [initializeFactorCache]);
 
   /**
    * Detect best thematic match for a position
@@ -507,19 +534,24 @@ export function useFactorAnalysis() {
     // Data
     factorData,
     factorAnalysis,
-    
+
     // State
     isAnalyzing,
-    
+    cacheUpdateStatus, // 'updating', 'ready', 'error', or null
+
     // Actions
     fetchFactorData,
     runAnalysis,
     getFactorExposure,
-    
+    initializeFactorCache, // Manual cache refresh
+
     // Utilities
     detectThematicMatch,
     computeFactorBetas,
     alignReturnsByDate,
     computeCorrelationFromAligned,
+
+    // Cache utilities
+    getCacheStats,
   };
 }
