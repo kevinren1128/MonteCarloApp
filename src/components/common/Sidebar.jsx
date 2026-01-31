@@ -571,6 +571,7 @@ const Sidebar = memo(({
           const status = tabStatus[tab.id];
           const hasNewContent = status?.hasNewContent;
           const isProcessing = status?.isProcessing;
+          const isStale = status?.isStale;
           const isActive = activeTab === tab.id;
 
           return (
@@ -581,7 +582,7 @@ const Sidebar = memo(({
                 position: 'relative',
               }}
               onClick={() => onTabChange(tab.id)}
-              title={isNarrow ? `${tab.label} (${tab.shortcut})${hasNewContent ? ' • New' : isProcessing ? ' • Processing' : ''}` : undefined}
+              title={isNarrow ? `${tab.label} (${tab.shortcut})${hasNewContent ? ' • New' : isProcessing ? ' • Processing' : isStale ? ' • Stale' : ''}` : undefined}
               onMouseOver={(e) => {
                 if (!isActive) {
                   e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
@@ -636,6 +637,22 @@ const Sidebar = memo(({
                     animation: 'pulse 2s infinite',
                   }}
                   title="Processing..."
+                />
+              )}
+              {/* Red dot for stale data - portfolio has changed since last calculation */}
+              {!isActive && isStale && !isProcessing && !hasNewContent && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '6px',
+                    right: '6px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #e74c3c, #c0392b)',
+                    boxShadow: '0 0 6px rgba(231, 76, 60, 0.5)',
+                  }}
+                  title="Data is stale - portfolio has changed"
                 />
               )}
             </button>

@@ -1125,6 +1125,80 @@ function MonteCarloSimulator() {
     }));
   }, []);
 
+  // ============================================
+  // STALE DATA TRACKING
+  // ============================================
+  // Track which tabs have stale data (positions changed since last calculation)
+  const [staleTabs, setStaleTabs] = useState({
+    distributions: false,
+    correlation: false,
+    simulation: false,
+    factors: false,
+    optimize: false,
+  });
+
+  // Track positions version to detect changes
+  const positionsVersionRef = useRef(0);
+  const lastPositionsKeyRef = useRef('');
+
+  // Mark tabs as stale when positions change (add/remove/modify ticker or quantity)
+  useEffect(() => {
+    // Create a key based on position tickers and quantities (not prices - those don't affect calculations)
+    const positionsKey = JSON.stringify(
+      positions
+        .filter(p => p.ticker) // Only include positions with tickers
+        .map(p => ({ ticker: p.ticker, quantity: p.quantity }))
+        .sort((a, b) => a.ticker.localeCompare(b.ticker))
+    );
+
+    // Skip on first render
+    if (lastPositionsKeyRef.current === '') {
+      lastPositionsKeyRef.current = positionsKey;
+      return;
+    }
+
+    // If positions haven't changed, do nothing
+    if (positionsKey === lastPositionsKeyRef.current) {
+      return;
+    }
+
+    // Positions changed! Mark relevant tabs as stale
+    console.log('[Stale] Portfolio changed, marking tabs as stale');
+    lastPositionsKeyRef.current = positionsKey;
+    positionsVersionRef.current += 1;
+
+    setStaleTabs({
+      distributions: true,
+      correlation: true,
+      simulation: true,
+      factors: true,
+      optimize: true,
+    });
+
+    // Cancel any running simulations (they're now invalid)
+    if (isSimulating && cancelSimulation) {
+      console.log('[Stale] Cancelling running simulation');
+      cancelSimulation();
+    }
+  }, [positions, isSimulating, cancelSimulation]);
+
+  // Helper to clear stale status for a tab
+  const clearStaleTab = useCallback((tabId) => {
+    setStaleTabs(prev => ({ ...prev, [tabId]: false }));
+  }, []);
+
+  // Track previous isSimulating state to detect completion
+  const wasSimulatingRef = useRef(false);
+
+  // Clear simulation stale status when simulation completes
+  useEffect(() => {
+    // Detect transition from simulating to not simulating (completion)
+    if (wasSimulatingRef.current && !isSimulating && simulationResults) {
+      clearStaleTab('simulation');
+    }
+    wasSimulatingRef.current = isSimulating;
+  }, [isSimulating, simulationResults, clearStaleTab]);
+
   const [sidebarExpanded, setSidebarExpanded] = useState(() => {
     const saved = localStorage.getItem('sidebar-expanded');
     return saved !== null ? JSON.parse(saved) : true;
@@ -3444,10 +3518,11 @@ function MonteCarloSimulator() {
     }
   }, [unifiedMarketData]);
   
-  // Remove position
-  const removePosition = (id) => {
+  // Remove position - wrapped in useCallback to prevent stale closures
+  const removePosition = useCallback((id) => {
+    console.log('[removePosition] Removing id:', id);
     setPositions(prev => prev.filter(p => p.id !== id));
-  };
+  }, []);
   
   // Update position with percentile constraints
   const updatePosition = async (id, field, value) => {
@@ -3746,7 +3821,10 @@ function MonteCarloSimulator() {
     // Apply distributions from unified data
     const updated = applyDistributionsFromUnified();
     console.log(`Applied distributions to ${updated} positions`);
-    
+
+    // Clear stale indicator - distributions are now fresh
+    clearStaleTab('distributions');
+
     setIsFetchingData(false);
   };
   
@@ -4072,7 +4150,10 @@ function MonteCarloSimulator() {
     setEditedCorrelation(corr.map(row => [...row]));
     console.log(`✅ Correlation matrix computed for ${historyTimeline}${useEwma ? ' with EWMA recency weighting' : ''} (${corr.length}x${corr.length})`);
     setIsFetchingData(false);
-    
+
+    // Clear stale indicator - correlation is now fresh
+    clearStaleTab('correlation');
+
     // Show success toast
     showToast({
       type: 'success',
@@ -4080,10 +4161,10 @@ function MonteCarloSimulator() {
       message: `${corr.length}×${corr.length} matrix for ${historyTimeline} period${useEwma ? ' (EWMA weighted)' : ''}`,
       duration: 3500,
     });
-    
+
     // Return the correlation matrix for immediate use (avoids state timing issues)
     return corr;
-  }, [positions, gldAsCash, correlationMethod, historyTimeline, useEwma, unifiedMarketData, getDistributionParams, showToast]);
+  }, [positions, gldAsCash, correlationMethod, historyTimeline, useEwma, unifiedMarketData, getDistributionParams, showToast, clearStaleTab]);
   
   // Update correlation cell
   const updateCorrelationCell = (i, j, value) => {
@@ -5323,7 +5404,10 @@ function MonteCarloSimulator() {
     console.log('✅ Factor analysis complete:', analysis);
     setFactorAnalysis(analysis);
     setIsFetchingFactors(false);
-    
+
+    // Clear stale indicator - factors are now fresh
+    clearStaleTab('factors');
+
     // Show success toast
     const thematicCount = sortedThematicGroups.filter(g => g.positions.length > 0).length;
     showToast({
@@ -5332,8 +5416,8 @@ function MonteCarloSimulator() {
       message: `${positionAnalysis.length} positions analyzed, ${thematicCount} thematic exposures found`,
       duration: 4000,
     });
-    
-  }, [factorData, positions, portfolioValue, unifiedMarketData, historicalData, computeFactorBetas, detectThematicMatch, thematicOverrides, useEwma, historyTimeline, showToast]);
+
+  }, [factorData, positions, portfolioValue, unifiedMarketData, historicalData, computeFactorBetas, detectThematicMatch, thematicOverrides, useEwma, historyTimeline, showToast, clearStaleTab]);
 
   // ============================================
   // PORTFOLIO OPTIMIZATION 
@@ -5817,11 +5901,14 @@ function MonteCarloSimulator() {
     
     const optTime = (results.computeTime / 1000).toFixed(1);
     console.log(`✅ Optimization complete in ${optTime}s`);
-    
+
     setOptimizationResults(results);
     setOptimizationProgress({ current: 100, total: 100, phase: 'Complete!' });
     setIsOptimizing(false);
-    
+
+    // Clear stale indicator - optimization is now fresh
+    clearStaleTab('optimize');
+
     // Show success toast
     showToast({
       type: 'success',
@@ -5830,7 +5917,7 @@ function MonteCarloSimulator() {
       duration: 4000,
     });
   }, [positions, weights, editedCorrelation, riskFreeRate, swapSize, optimizationPaths, getDistributionParams,
-      grossPositionsValue, portfolioValue, cashBalance, cashRate, useQmc, showToast]);
+      grossPositionsValue, portfolioValue, cashBalance, cashRate, useQmc, showToast, clearStaleTab]);
 
   // ============================================
   // THEMATIC ETF SWAP ANALYSIS
@@ -6864,34 +6951,42 @@ function MonteCarloSimulator() {
           positions: {
             hasNewContent: tabContentUpdatedAt.positions > tabVisitedAt.positions,
             isProcessing: isFetchingUnified || isFetchingBetas,
+            isStale: false, // Positions tab is never stale
           },
           consensus: {
             hasNewContent: tabContentUpdatedAt.consensus > tabVisitedAt.consensus,
             isProcessing: false, // Consensus loads with full load, tracked separately
+            isStale: false, // Consensus is always fresh from API
           },
           distributions: {
             hasNewContent: tabContentUpdatedAt.distributions > tabVisitedAt.distributions,
             isProcessing: isFetchingYearReturns,
+            isStale: staleTabs.distributions,
           },
           correlation: {
             hasNewContent: tabContentUpdatedAt.correlation > tabVisitedAt.correlation,
             isProcessing: isFetchingData || isAnalyzingLag,
+            isStale: staleTabs.correlation,
           },
           factors: {
             hasNewContent: tabContentUpdatedAt.factors > tabVisitedAt.factors,
             isProcessing: isFetchingFactors,
+            isStale: staleTabs.factors,
           },
           simulation: {
             hasNewContent: tabContentUpdatedAt.simulation > tabVisitedAt.simulation,
             isProcessing: isSimulating,
+            isStale: staleTabs.simulation,
           },
           optimize: {
             hasNewContent: tabContentUpdatedAt.optimize > tabVisitedAt.optimize,
             isProcessing: isOptimizing,
+            isStale: staleTabs.optimize,
           },
           export: {
             hasNewContent: false,
             isProcessing: false,
+            isStale: false,
           },
         }}
         UserMenu={UserMenu}
