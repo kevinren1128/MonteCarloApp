@@ -2350,7 +2350,8 @@ function MonteCarloSimulator() {
           processed.workerSource = true;
         }
         if (workerVol && workerVol.annualizedVol != null) {
-          processed.volatility = workerVol.annualizedVol;
+          // Worker returns volatility as decimal (0.238), convert to percentage (23.8)
+          processed.volatility = workerVol.annualizedVol * 100;
           processed.ytdReturn = workerVol.ytdReturn;
           processed.oneYearReturn = workerVol.oneYearReturn;
           processed.thirtyDayReturn = workerVol.thirtyDayReturn;
