@@ -1198,13 +1198,19 @@ const PositionsTableCard = memo(({
                   <td style={{ ...tdStyle, width: colWidths.action }}>
                     <button 
                       style={deleteButtonStyle} 
-                      onClick={() => setConfirmDialog({
-                        title: `Remove ${pos.ticker || 'Position'}?`,
-                        message: `This will remove ${pos.ticker || 'this position'} (${pos.quantity} shares, $${Math.abs(pos.quantity * pos.price).toLocaleString()}) from your portfolio.`,
-                        confirmLabel: 'Remove',
-                        confirmVariant: 'danger',
-                        onConfirm: () => removePosition(pos.id),
-                      })}
+                      onClick={() => {
+                        console.log('[Delete] Opening dialog for pos.id:', pos.id, 'ticker:', pos.ticker);
+                        setConfirmDialog({
+                          title: `Remove ${pos.ticker || 'Position'}?`,
+                          message: `This will remove ${pos.ticker || 'this position'} (${pos.quantity} shares, $${Math.abs(pos.quantity * pos.price).toLocaleString()}) from your portfolio.`,
+                          confirmLabel: 'Remove',
+                          confirmVariant: 'danger',
+                          onConfirm: () => {
+                            console.log('[Delete] onConfirm called for pos.id:', pos.id);
+                            removePosition(pos.id);
+                          },
+                        });
+                      }}
                       title={`Remove ${pos.ticker}`}
                       aria-label={`Remove ${pos.ticker} position`}
                     >

@@ -3517,8 +3517,13 @@ function MonteCarloSimulator() {
   
   // Remove position - wrapped in useCallback to prevent stale closures
   const removePosition = useCallback((id) => {
-    console.log('[removePosition] Removing id:', id);
-    setPositions(prev => prev.filter(p => p.id !== id));
+    console.log('[removePosition] Called with id:', id, 'type:', typeof id);
+    setPositions(prev => {
+      console.log('[removePosition] Current positions:', prev.map(p => ({ id: p.id, ticker: p.ticker, idType: typeof p.id })));
+      const filtered = prev.filter(p => p.id !== id);
+      console.log('[removePosition] After filter, count:', filtered.length, '(was:', prev.length, ')');
+      return filtered;
+    });
   }, []);
   
   // Update position with percentile constraints
