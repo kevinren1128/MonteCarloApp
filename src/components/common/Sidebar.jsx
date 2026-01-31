@@ -54,14 +54,14 @@ function getSnapDistance(width) {
 
 // Tab configuration with icons and short labels for medium mode
 const TABS = [
-  { id: 'positions', label: 'Positions', shortLabel: 'Pos', icon: '📊', shortcut: '1' },
-  { id: 'consensus', label: 'Consensus', shortLabel: 'Est', icon: '📋', shortcut: '2' },
-  { id: 'distributions', label: 'Distributions', shortLabel: 'Dist', icon: '📈', shortcut: '3' },
-  { id: 'correlation', label: 'Correlation', shortLabel: 'Corr', icon: '🔗', shortcut: '4' },
-  { id: 'simulation', label: 'Simulation', shortLabel: 'Sim', icon: '🎲', shortcut: '5' },
-  { id: 'factors', label: 'Factors', shortLabel: 'Fac', icon: '⚡', shortcut: '6' },
-  { id: 'optimize', label: 'Optimize', shortLabel: 'Opt', icon: '🎯', shortcut: '7' },
-  { id: 'export', label: 'Export', shortLabel: 'Exp', icon: '📄', shortcut: '8' },
+  { id: 'positions', label: 'Positions', shortLabel: 'Positions', icon: '📊', shortcut: '1' },
+  { id: 'consensus', label: 'Consensus', shortLabel: 'Consensus', icon: '📋', shortcut: '2' },
+  { id: 'distributions', label: 'Distributions', shortLabel: 'Distribs', icon: '📈', shortcut: '3' },
+  { id: 'correlation', label: 'Correlation', shortLabel: 'Correlate', icon: '🔗', shortcut: '4' },
+  { id: 'simulation', label: 'Simulation', shortLabel: 'Simulate', icon: '🎲', shortcut: '5' },
+  { id: 'factors', label: 'Factors', shortLabel: 'Factors', icon: '⚡', shortcut: '6' },
+  { id: 'optimize', label: 'Optimize', shortLabel: 'Optimize', icon: '🎯', shortcut: '7' },
+  { id: 'export', label: 'Export', shortLabel: 'Export', icon: '📄', shortcut: '8' },
 ];
 
 const Sidebar = memo(({
@@ -718,7 +718,7 @@ const Sidebar = memo(({
             overflow: 'hidden',
             whiteSpace: 'nowrap',
             transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-          }}>{isLoading ? (isMedium ? '...' : 'Loading...') : (isMedium ? 'Load' : 'Load All')}</span>
+          }}>{isLoading ? 'Loading...' : 'Load All'}</span>
           {!isLoading && showShortcuts && (
             <kbd style={{
               marginLeft: 'auto',
@@ -880,7 +880,7 @@ const Sidebar = memo(({
                 overflow: 'hidden',
                 whiteSpace: 'nowrap',
                 transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-              }}>{isMedium ? 'Exp' : 'Export'}</span>
+              }}>Export</span>
             </button>
 
             <label
@@ -919,7 +919,7 @@ const Sidebar = memo(({
                 overflow: 'hidden',
                 whiteSpace: 'nowrap',
                 transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-              }}>{isMedium ? 'Imp' : 'Import'}</span>
+              }}>Import</span>
               <input
                 type="file"
                 accept=".json"
@@ -965,7 +965,7 @@ const Sidebar = memo(({
                 overflow: 'hidden',
                 whiteSpace: 'nowrap',
                 transition: showLabels ? 'opacity 0.15s ease 0.15s, width 0.25s ease' : 'opacity 0.1s ease, width 0.25s ease',
-              }}>{isMedium ? 'Rst' : 'Reset'}</span>
+              }}>Reset</span>
             </button>
           </div>
         )}
