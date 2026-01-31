@@ -32,6 +32,14 @@ import { styles } from './styles/appStyles';
 // Yahoo Finance API service
 import { fetchYahooQuote } from './services/yahooFinance';
 
+// Position price cache for persistent storage
+import {
+  loadPositionPriceCache,
+  updatePositionPriceCache,
+  getCachedPrices,
+  clearPositionPriceCache,
+} from './services/positionPriceCache';
+
 // FMP API service for consensus data
 import { batchFetchConsensusData, getApiKey as getFmpApiKey } from './services/fmpService';
 
@@ -1786,43 +1794,72 @@ function MonteCarloSimulator() {
     const startTime = performance.now();
     setIsFetchingUnified(true);
     setFetchErrors([]);
-    
+
     // Get all unique tickers
     const tickers = [...new Set(
       positions.map(p => p.ticker?.toUpperCase()).filter(Boolean)
     )];
-    
+
     if (tickers.length === 0) {
       setIsFetchingUnified(false);
       return;
     }
-    
+
     // Add SPY if not already in positions (needed for beta calculation)
     // Also add factor ETFs for factor analysis
     const factorETFs = ['SPY', 'IWM', 'IWD', 'IWF', 'MTUM', 'QUAL', 'SPLV', ...Object.keys(THEMATIC_ETFS)];
     const allTickers = [...new Set([...factorETFs, ...tickers])];
     setUnifiedFetchProgress({ current: 0, total: allTickers.length, message: 'Initializing...' });
-    
+
     console.log(`🚀 Fetching unified data for ${allTickers.length} tickers (${tickers.length} positions + ${factorETFs.length} factor ETFs)...`);
-    
+
+    // Load persistent position price cache for incremental updates
+    // This avoids fetching 5 years of history for each position on every load
+    let positionPriceCache = null;
+    try {
+      const { cache, updated, reason } = await updatePositionPriceCache(tickers, (current, total, ticker) => {
+        setUnifiedFetchProgress({ current, total: tickers.length, message: `Updating cache: ${ticker}...` });
+      });
+      positionPriceCache = cache;
+      if (updated) {
+        console.log(`💾 Position price cache updated: ${reason}`);
+      } else {
+        console.log(`💾 Position price cache: ${reason}`);
+      }
+    } catch (err) {
+      console.warn('[PositionCache] Failed to update cache:', err);
+    }
+
     const newData = { ...unifiedMarketData };
     const errors = [];
-    
+
     // Separate cached vs need-to-fetch
     const needsFetch = [];
     const cachedTickers = [];
     const historyResults = {};
-    
+
     for (const ticker of allTickers) {
       const cached = newData[ticker];
+      // Check in-memory cache first
       if (!forceRefresh && cached?.fetchedAt && Date.now() - cached.fetchedAt < UNIFIED_CACHE_MAX_AGE) {
         cachedTickers.push(ticker);
         historyResults[ticker] = { ticker, data: cached.closePrices, cached: true };
+      }
+      // For position tickers, check persistent cache if not in memory
+      else if (!forceRefresh && tickers.includes(ticker) && positionPriceCache) {
+        const cachedPrices = getCachedPrices(positionPriceCache, ticker);
+        if (cachedPrices && cachedPrices.length > 0) {
+          cachedTickers.push(ticker);
+          historyResults[ticker] = { ticker, data: cachedPrices, cached: true, fromPersistentCache: true };
+          console.log(`💾 Using persistent cache for ${ticker} (${cachedPrices.length} days)`);
+        } else {
+          needsFetch.push(ticker);
+        }
       } else {
         needsFetch.push(ticker);
       }
     }
-    
+
     let completedCount = cachedTickers.length;
     console.log(`📦 ${cachedTickers.length} tickers from cache, ${needsFetch.length} to fetch`);
     
@@ -6350,6 +6387,7 @@ function MonteCarloSimulator() {
               localStorage.removeItem(UNIFIED_CACHE_KEY);
               localStorage.removeItem(FACTOR_CACHE_KEY);
               localStorage.removeItem('monte-carlo-factor-etf-prices-v1'); // Persistent factor cache
+              localStorage.removeItem('monte-carlo-position-prices-v1'); // Persistent position cache
               window.location.reload();
             },
           });
