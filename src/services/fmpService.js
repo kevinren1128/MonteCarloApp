@@ -116,6 +116,39 @@ const extractFiscalYear = (dateStr) => {
 // Cache for exchange rates (refreshed once per session)
 const exchangeRateCache = {};
 
+// Hardcoded fallback exchange rates for common currencies (updated periodically)
+const FALLBACK_EXCHANGE_RATES = {
+  'TWD': 0.031,  // Taiwan Dollar
+  'EUR': 1.08,   // Euro
+  'GBP': 1.27,   // British Pound
+  'JPY': 0.0067, // Japanese Yen
+  'KRW': 0.00074, // Korean Won
+  'CNY': 0.14,   // Chinese Yuan
+  'HKD': 0.128,  // Hong Kong Dollar
+  'CHF': 1.13,   // Swiss Franc
+  'AUD': 0.65,   // Australian Dollar
+  'CAD': 0.74,   // Canadian Dollar
+  'SEK': 0.095,  // Swedish Krona
+  'DKK': 0.145,  // Danish Krone
+  'NOK': 0.091,  // Norwegian Krone
+  'INR': 0.012,  // Indian Rupee
+  'BRL': 0.17,   // Brazilian Real
+};
+
+/**
+ * Get fallback exchange rate for a currency
+ * @param {string} fromCurrency - Currency code
+ * @returns {number} Exchange rate or 1 if not found
+ */
+const getFallbackRate = (fromCurrency) => {
+  if (FALLBACK_EXCHANGE_RATES[fromCurrency]) {
+    console.log(`[FMP] Using fallback exchange rate for ${fromCurrency}: ${FALLBACK_EXCHANGE_RATES[fromCurrency]}`);
+    return FALLBACK_EXCHANGE_RATES[fromCurrency];
+  }
+  console.warn(`[FMP] No fallback exchange rate for ${fromCurrency}, defaulting to 1`);
+  return 1;
+};
+
 /**
  * Fetch exchange rate from a currency to USD
  * @param {string} fromCurrency - Source currency code (e.g., 'EUR', 'GBP')
@@ -130,19 +163,23 @@ const fetchExchangeRate = async (fromCurrency, apiKey) => {
     return exchangeRateCache[cacheKey];
   }
 
-  try {
-    // FMP forex endpoint: /fx/{pair}
-    const pair = `${fromCurrency}USD`;
-    const data = await fetchFMP(`/fx/${pair}`, apiKey);
+  const pair = `${fromCurrency}USD`;
 
+  // Try FMP forex endpoint
+  try {
+    const data = await fetchFMP(`/fx/${pair}`, apiKey);
     if (data && data[0]?.price) {
       const rate = data[0].price;
       exchangeRateCache[cacheKey] = rate;
       console.log(`[FMP] Exchange rate ${fromCurrency} -> USD:`, rate);
       return rate;
     }
+  } catch (err) {
+    // Continue to next fallback
+  }
 
-    // Fallback: try quote endpoint for forex pair
+  // Try quote endpoint for forex pair
+  try {
     const quoteData = await fetchFMP(`/quote/${pair}`, apiKey);
     if (quoteData && quoteData[0]?.price) {
       const rate = quoteData[0].price;
@@ -150,8 +187,12 @@ const fetchExchangeRate = async (fromCurrency, apiKey) => {
       console.log(`[FMP] Exchange rate (quote) ${fromCurrency} -> USD:`, rate);
       return rate;
     }
+  } catch (err) {
+    // Continue to next fallback
+  }
 
-    // Fallback 2: try v3 forex endpoint
+  // Try v3 forex endpoint
+  try {
     const v3Url = `https://financialmodelingprep.com/api/v3/fx/${pair}?apikey=${apiKey}`;
     const v3Response = await fetch(v3Url);
     if (v3Response.ok) {
@@ -163,39 +204,15 @@ const fetchExchangeRate = async (fromCurrency, apiKey) => {
         return rate;
       }
     }
-
-    console.warn(`[FMP] Could not fetch exchange rate for ${fromCurrency}, using fallback`);
-    // Use hardcoded fallback rates for common currencies
-    const fallbackRates = {
-      'TWD': 0.031,  // Taiwan Dollar
-      'EUR': 1.08,   // Euro
-      'GBP': 1.27,   // British Pound
-      'JPY': 0.0067, // Japanese Yen
-      'KRW': 0.00074, // Korean Won
-      'CNY': 0.14,   // Chinese Yuan
-      'HKD': 0.128,  // Hong Kong Dollar
-      'CHF': 1.13,   // Swiss Franc
-      'AUD': 0.65,   // Australian Dollar
-      'CAD': 0.74,   // Canadian Dollar
-      'SEK': 0.095,  // Swedish Krona
-      'DKK': 0.145,  // Danish Krone
-      'NOK': 0.091,  // Norwegian Krone
-      'INR': 0.012,  // Indian Rupee
-      'BRL': 0.17,   // Brazilian Real
-    };
-
-    if (fallbackRates[fromCurrency]) {
-      const rate = fallbackRates[fromCurrency];
-      exchangeRateCache[cacheKey] = rate;
-      console.log(`[FMP] Using fallback exchange rate for ${fromCurrency}:`, rate);
-      return rate;
-    }
-
-    return 1; // Default to 1 if we can't get the rate
   } catch (err) {
-    console.warn(`[FMP] Exchange rate fetch failed for ${fromCurrency}:`, err);
-    return 1;
+    // Continue to fallback
   }
+
+  // All API attempts failed, use hardcoded fallback rate
+  console.warn(`[FMP] Could not fetch exchange rate for ${fromCurrency} from API, using fallback`);
+  const fallbackRate = getFallbackRate(fromCurrency);
+  exchangeRateCache[cacheKey] = fallbackRate;
+  return fallbackRate;
 };
 
 /**
@@ -948,6 +965,7 @@ export const fetchCashFlowStatement = async (ticker, apiKey) => {
       freeCashFlow: latest.freeCashFlow,
       operatingCashFlow: latest.operatingCashFlow,
       capitalExpenditure: latest.capitalExpenditure,
+      reportedCurrency: latest.reportedCurrency || null,
       historical,
     };
   } catch (err) {
@@ -1053,23 +1071,31 @@ export const fetchConsensusData = async (ticker, apiKey) => {
     return null;
   }
 
-  // Detect reporting currency from income statement (more reliable than quote for ADRs)
-  // For ADRs like TSM: quote.currency = USD (trading currency) but income.reportedCurrency = TWD (reporting currency)
-  // The analyst estimates are in the REPORTING currency, not the trading currency
-  const reportingCurrency = income?.reportedCurrency || quote?.currency || 'USD';
-  const tradingCurrency = quote?.currency || 'USD';
+  // Detect reporting currency from financial statements (income or balance sheet)
+  // For ADRs like TSM: quote is in USD (trading currency) but financial statements are in TWD (reporting currency)
+  // The analyst estimates are also in the REPORTING currency, not the trading currency
+  // Try multiple sources for the reporting currency to ensure we detect it correctly
+  const reportingCurrency = income?.reportedCurrency
+    || balanceSheet?.reportedCurrency
+    || cashFlowStmt?.reportedCurrency
+    || 'USD';
+  const tradingCurrency = quote?.exchange?.includes('NYSE') || quote?.exchange?.includes('NASDAQ') ? 'USD' : 'USD';
+
+  console.log(`[FMP] ${ticker}: Detected currencies - income: ${income?.reportedCurrency}, balanceSheet: ${balanceSheet?.reportedCurrency}, final: ${reportingCurrency}`);
 
   // Get exchange rate for converting reporting currency values to USD
-  const exchangeRate = reportingCurrency !== 'USD'
-    ? await fetchExchangeRate(reportingCurrency, apiKey)
-    : 1;
+  let exchangeRate = 1;
+  if (reportingCurrency !== 'USD') {
+    exchangeRate = await fetchExchangeRate(reportingCurrency, apiKey);
+    console.log(`[FMP] ${ticker}: Exchange rate ${reportingCurrency} -> USD: ${exchangeRate}`);
+  }
 
   // Helper to convert monetary values from reporting currency to USD
   const toUSD = (val) => convertToUSD(val, exchangeRate);
 
-  if (reportingCurrency !== 'USD') {
-    console.log(`[FMP] ${ticker}: Trading in ${tradingCurrency}, Reporting in ${reportingCurrency}, FX rate: ${exchangeRate}`);
-  }
+  // Debug: Log raw balance sheet values before conversion
+  console.log(`[FMP] ${ticker}: Raw balance sheet - totalDebt: ${balanceSheet?.totalDebt}, cash: ${balanceSheet?.cashAndCashEquivalents}`);
+  console.log(`[FMP] ${ticker}: Converted - totalDebt: ${toUSD(balanceSheet?.totalDebt)}, cash: ${toUSD(balanceSheet?.cashAndCashEquivalents)}`);
 
   // IMPORTANT: For ADRs, quote data (price, marketCap) is in TRADING currency (usually USD)
   // But financial statements (income, balance sheet) are in REPORTING currency (e.g., TWD for TSM)
