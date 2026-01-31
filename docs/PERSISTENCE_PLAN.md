@@ -117,7 +117,7 @@ GET /api/fx?pairs=EURUSD,GBPUSD
   - After optimization
 - [x] Add sync status indicator (in UserMenu)
 - [x] Handle offline mode gracefully
-- [ ] Test cross-device sync (manual test needed)
+- [x] Test cross-device sync ✓
 
 ### ✅ Phase 6: Vercel Deployment (COMPLETE)
 - [x] Connect GitHub repo to Vercel
@@ -168,7 +168,10 @@ wrangler.toml            ✅ Cloudflare config (needs namespace ID)
 2. ~~**Set up Cloudflare Worker**~~ ✅ COMPLETE - Deployed at monte-carlo-cache.kevinren1128.workers.dev
 3. ~~**Extend portfolioService**~~ ✅ COMPLETE - All data types now supported
 4. ~~**Deploy to Vercel**~~ ✅ COMPLETE - Live at monte-carlo-app-ivory.vercel.app
-5. **Test cross-device sync** - Verify data loads correctly on different devices
+5. ~~**Test cross-device sync**~~ ✅ COMPLETE - Verified working
+6. ~~**Document architecture**~~ ✅ COMPLETE - CLAUDE.md and docs/ARCHITECTURE.md updated
+
+**🎉 All phases complete! Server-side persistence is fully implemented.**
 
 ---
 
