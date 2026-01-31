@@ -428,8 +428,8 @@ const Sidebar = memo(({
       <nav style={styles.nav}>
         {TABS.map((tab) => {
           const status = tabStatus[tab.id];
-          const hasContent = status?.hasContent;
-          const needsAction = status?.needsAction;
+          const hasNewContent = status?.hasNewContent;
+          const isProcessing = status?.isProcessing;
           const isActive = activeTab === tab.id;
 
           return (
@@ -440,7 +440,7 @@ const Sidebar = memo(({
                 position: 'relative',
               }}
               onClick={() => onTabChange(tab.id)}
-              title={!isExpanded ? `${tab.label} (${tab.shortcut})${hasContent ? ' ✓' : needsAction ? ' !' : ''}` : undefined}
+              title={!isExpanded ? `${tab.label} (${tab.shortcut})${hasNewContent ? ' • New' : isProcessing ? ' • Processing' : ''}` : undefined}
               onMouseOver={(e) => {
                 if (!isActive) {
                   e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
@@ -465,8 +465,8 @@ const Sidebar = memo(({
                 transition: isExpanded ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
                 flexShrink: 0,
               }}>{tab.shortcut}</span>
-              {/* Status indicator dot */}
-              {!isActive && hasContent && (
+              {/* Status indicator dot - green for new content (unvisited), orange for processing */}
+              {!isActive && hasNewContent && !isProcessing && (
                 <span
                   style={{
                     position: 'absolute',
@@ -478,10 +478,10 @@ const Sidebar = memo(({
                     background: 'linear-gradient(135deg, #2ecc71, #27ae60)',
                     boxShadow: '0 0 6px rgba(46, 204, 113, 0.5)',
                   }}
-                  title="Complete"
+                  title="New content available"
                 />
               )}
-              {!isActive && needsAction && !hasContent && (
+              {!isActive && isProcessing && (
                 <span
                   style={{
                     position: 'absolute',
@@ -494,7 +494,7 @@ const Sidebar = memo(({
                     boxShadow: '0 0 6px rgba(255, 159, 67, 0.5)',
                     animation: 'pulse 2s infinite',
                   }}
-                  title="Action needed"
+                  title="Processing..."
                 />
               )}
             </button>

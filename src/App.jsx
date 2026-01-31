@@ -1082,6 +1082,49 @@ function MonteCarloSimulator() {
   });
 
   const [activeTab, setActiveTab] = useState('positions');
+
+  // Track which tabs have been visited since new content was loaded
+  // Key = tab id, Value = timestamp when tab was last visited
+  const [tabVisitedAt, setTabVisitedAt] = useState({
+    positions: Date.now(), // Start with positions visited
+    consensus: 0,
+    distributions: 0,
+    correlation: 0,
+    simulation: 0,
+    factors: 0,
+    optimize: 0,
+    export: 0,
+  });
+
+  // Track when content was last updated for each tab
+  // Key = tab id, Value = timestamp when content was last updated
+  const [tabContentUpdatedAt, setTabContentUpdatedAt] = useState({
+    positions: 0,
+    consensus: 0,
+    distributions: 0,
+    correlation: 0,
+    simulation: 0,
+    factors: 0,
+    optimize: 0,
+    export: 0,
+  });
+
+  // Mark a tab as visited when user switches to it
+  useEffect(() => {
+    setTabVisitedAt(prev => ({
+      ...prev,
+      [activeTab]: Date.now(),
+    }));
+  }, [activeTab]);
+
+  // Helper to mark content as updated for a tab
+  const markTabContentUpdated = useCallback((tabId) => {
+    setTabContentUpdatedAt(prev => ({
+      ...prev,
+      [tabId]: Date.now(),
+    }));
+  }, []);
+
   const [sidebarExpanded, setSidebarExpanded] = useState(() => {
     const saved = localStorage.getItem('sidebar-expanded');
     return saved !== null ? JSON.parse(saved) : true;
@@ -6139,6 +6182,7 @@ function MonteCarloSimulator() {
       const priceUpdates = refreshPricesFromUnified(loadedMarketData);
       if (priceUpdates > 0) {
         console.log(`💰 Updated ${priceUpdates} position prices`);
+        markTabContentUpdated('positions');
       }
 
       await new Promise(r => setTimeout(r, 300)); // Brief pause for UI
@@ -6209,27 +6253,31 @@ function MonteCarloSimulator() {
       } else {
         console.log('No correlation groups defined (no cached metadata), skipping floor adjustments');
       }
+      markTabContentUpdated('correlation');
       await new Promise(r => setTimeout(r, 300));
-      
+
       // Step 6: Run simulation (pass the final correlation matrix directly)
       setFullLoadProgress({ step: 6, total: steps.length, phase: steps[5].name, detail: `${numPaths.toLocaleString()} paths${useQmc ? ' (QMC)' : ''}...` });
       console.log(`\n${'='.repeat(50)}\n🎲 FULL LOAD: Step 6/${steps.length} - ${steps[5].name}\n${'='.repeat(50)}`);
       
       await runSimulation(finalCorrelation);
+      markTabContentUpdated('simulation');
       await new Promise(r => setTimeout(r, 300));
-      
+
       // Step 7: Run factor analysis (fetchFactorData fetches ETF data AND runs analysis)
       setFullLoadProgress({ step: 7, total: steps.length, phase: steps[6].name, detail: 'Fetching factor ETFs and computing exposures...' });
       console.log(`\n${'='.repeat(50)}\n🧬 FULL LOAD: Step 7/${steps.length} - ${steps[6].name}\n${'='.repeat(50)}`);
       
       await fetchFactorData(loadedMarketData);
+      markTabContentUpdated('factors');
       await new Promise(r => setTimeout(r, 300));
-      
+
       // Step 8: Run optimization (pass the final correlation matrix directly to avoid state timing issues)
       setFullLoadProgress({ step: 8, total: steps.length, phase: steps[7].name, detail: 'Analyzing swap opportunities...' });
       console.log(`\n${'='.repeat(50)}\n🎯 FULL LOAD: Step 8/${steps.length} - ${steps[7].name}\n${'='.repeat(50)}`);
 
       await runPortfolioOptimization(finalCorrelation);
+      markTabContentUpdated('optimize');
       await new Promise(r => setTimeout(r, 300));
 
       // Step 9: Load consensus data from FMP API
@@ -6253,6 +6301,7 @@ function MonteCarloSimulator() {
             localStorage.setItem('monte-carlo-consensus-data', JSON.stringify(consensusData));
             localStorage.setItem('monte-carlo-consensus-timestamp', Date.now().toString());
             console.log(`✅ Consensus data loaded for ${Object.keys(consensusData).length} tickers`);
+            markTabContentUpdated('consensus');
           }
         } catch (consensusError) {
           console.warn('Consensus data fetch failed (non-critical):', consensusError.message);
@@ -6639,27 +6688,36 @@ function MonteCarloSimulator() {
         marketDataProgress={unifiedFetchProgress}
         tabStatus={{
           positions: {
-            hasContent: positions.length > 0 && Object.keys(positionBetas).length > 0,
+            hasNewContent: tabContentUpdatedAt.positions > tabVisitedAt.positions,
+            isProcessing: isFetchingUnified || isFetchingBetas,
+          },
+          consensus: {
+            hasNewContent: tabContentUpdatedAt.consensus > tabVisitedAt.consensus,
+            isProcessing: false, // Consensus loads with full load, tracked separately
           },
           distributions: {
-            hasContent: positions.some(p => p.p50 !== 0.08 || p.p5 !== -0.25 || p.p95 !== 0.40),
+            hasNewContent: tabContentUpdatedAt.distributions > tabVisitedAt.distributions,
+            isProcessing: isFetchingYearReturns,
           },
           correlation: {
-            hasContent: !!editedCorrelation,
-            needsAction: !editedCorrelation && Object.keys(unifiedMarketData).length > 0,
+            hasNewContent: tabContentUpdatedAt.correlation > tabVisitedAt.correlation,
+            isProcessing: isFetchingData || isAnalyzingLag,
           },
           factors: {
-            hasContent: !!factorAnalysis,
+            hasNewContent: tabContentUpdatedAt.factors > tabVisitedAt.factors,
+            isProcessing: isFetchingFactors,
           },
           simulation: {
-            hasContent: !!simulationResults,
-            needsAction: !simulationResults && !!editedCorrelation,
+            hasNewContent: tabContentUpdatedAt.simulation > tabVisitedAt.simulation,
+            isProcessing: isSimulating,
           },
           optimize: {
-            hasContent: !!optimizationResults,
+            hasNewContent: tabContentUpdatedAt.optimize > tabVisitedAt.optimize,
+            isProcessing: isOptimizing,
           },
           export: {
-            hasContent: false,
+            hasNewContent: false,
+            isProcessing: false,
           },
         }}
         UserMenu={UserMenu}
