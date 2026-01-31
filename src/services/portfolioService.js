@@ -1006,21 +1006,25 @@ export async function saveCorrelationGroups(groups, groupType = 'sector', source
       return { success: false, error: idError };
     }
 
-    // Convert groups object to flat records
-    const records = [];
+    // Convert groups object to flat records, deduplicating by ticker
+    // Each ticker can only belong to one group - last group wins if duplicates exist
+    const tickerToRecord = new Map();
     for (const [groupName, tickers] of Object.entries(groups)) {
       if (!Array.isArray(tickers)) continue;
       for (const ticker of tickers) {
         if (!ticker) continue;
-        records.push({
+        const upperTicker = ticker.toUpperCase();
+        tickerToRecord.set(upperTicker, {
           portfolio_id: portfolioId,
-          ticker: ticker.toUpperCase(),
+          ticker: upperTicker,
           group_type: groupType,
           group_name: groupName,
           source: source,
         });
       }
     }
+
+    const records = Array.from(tickerToRecord.values());
 
     if (records.length === 0) {
       logger.info('No correlation groups to save');
