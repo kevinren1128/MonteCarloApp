@@ -5897,7 +5897,9 @@ function MonteCarloSimulator() {
       setFullLoadProgress({ step: 1, total: steps.length, phase: steps[0].name, detail: 'Fetching prices and returns...' });
       console.log(`\n${'='.repeat(50)}\n🚀 FULL LOAD: Step 1/${steps.length} - ${steps[0].name}\n${'='.repeat(50)}`);
       
-      const loadedMarketData = await fetchUnifiedMarketData(true);
+      // Use smart caching: only fetch incremental data (new trading days / new tickers)
+      // forceRefresh=false enables the positionPriceCache logic to skip already-fetched data
+      const loadedMarketData = await fetchUnifiedMarketData(false);
 
       // Verify data was loaded
       const loadedTickers = Object.keys(loadedMarketData || {});
