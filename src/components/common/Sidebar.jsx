@@ -217,12 +217,12 @@ const Sidebar = memo(({
       flex: 1,
     },
     logoIcon: {
-      fontSize: '20px',
+      fontSize: '26px',
       flexShrink: 0,
     },
     logoText: {
-      fontSize: isMedium ? '11px' : '13px',
-      fontWeight: '600',
+      fontSize: isMedium ? '14px' : '17px',
+      fontWeight: '700',
       background: 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)',
       WebkitBackgroundClip: 'text',
       WebkitTextFillColor: 'transparent',
@@ -498,8 +498,24 @@ const Sidebar = memo(({
       <div style={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
           <div style={styles.logo}>
-            <span style={styles.logoIcon}>📈</span>
-            <span style={styles.logoText}>factorsim.xyz</span>
+            {/* Full logo for expanded mode */}
+            {showLabels && (
+              <>
+                <span style={styles.logoIcon}>💹</span>
+                <span style={styles.logoText}>factorsim.xyz</span>
+              </>
+            )}
+            {/* Compact "FS" for collapsed sidebar */}
+            {!showLabels && (
+              <span style={{
+                fontSize: '20px',
+                fontWeight: '700',
+                background: 'linear-gradient(135deg, #00d4ff 0%, #7b2ff7 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                letterSpacing: '2px',
+              }}>FS</span>
+            )}
           </div>
         </div>
 
