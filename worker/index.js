@@ -161,6 +161,28 @@ export default {
       } else if (path.startsWith('/api/optimize')) {
         handler = 'optimize';
         response = await handleOptimize(url, env, requestId);
+      } else if (path === '/api/cron-test') {
+        // Manual trigger for testing the cron job
+        handler = 'cron-test';
+        log.info('Manual cron trigger', { requestId });
+        await handleScheduled({ scheduledTime: new Date().toISOString() }, env);
+        response = jsonResponse({ status: 'ok', message: 'Cron job triggered manually' });
+      } else if (path === '/api/db-test') {
+        // Test database connection
+        handler = 'db-test';
+        try {
+          const db = createSupabaseRest(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+          await db.upsert('consensus_snapshots', [{
+            ticker: 'DBTEST',
+            as_of_date: new Date().toISOString().split('T')[0],
+            price: 999,
+            data: { test: true },
+            status: 'ok',
+          }]);
+          response = jsonResponse({ status: 'ok', message: 'DB test insert successful' });
+        } catch (err) {
+          response = jsonResponse({ status: 'error', message: err.message }, 500);
+        }
       } else if (url.searchParams.has('url')) {
         handler = 'legacy';
         response = await handleLegacyProxy(url, env, requestId);
@@ -1015,8 +1037,8 @@ function createSupabaseRest(url, serviceKey) {
       return res.json();
     },
 
-    async upsert(table, records) {
-      const res = await fetch(`${baseUrl}/${table}`, {
+    async upsert(table, records, onConflict = 'ticker,as_of_date') {
+      const res = await fetch(`${baseUrl}/${table}?on_conflict=${onConflict}`, {
         method: 'POST',
         headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify(records),
@@ -1156,15 +1178,15 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
   const requestId = `cron-${crypto.randomUUID().slice(0, 8)}`;
 
   try {
-    // Fetch all endpoints in parallel (same as frontend fmpService.js)
+    // Fetch all endpoints in parallel (using query params like frontend fmpService.js)
     const [estimates, quote, ev, metrics, priceTargets, ratings, growth] = await Promise.all([
-      fetchFMPStableEndpoint(`/analyst-estimates/${ticker}`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/quote/${ticker}`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/enterprise-values/${ticker}?limit=1`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/key-metrics/${ticker}?limit=1`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/price-target-consensus/${ticker}`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/analyst-stock-recommendations/${ticker}`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/financial-growth/${ticker}?limit=1`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/analyst-estimates?symbol=${ticker}&period=annual&limit=5`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/quote?symbol=${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/enterprise-values?symbol=${ticker}&limit=1`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/key-metrics?symbol=${ticker}&period=ttm`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/price-target-consensus?symbol=${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/grades-consensus?symbol=${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/financial-growth?symbol=${ticker}&limit=3`, apiKey, requestId),
     ]);
 
     const duration = Date.now() - startTime;
