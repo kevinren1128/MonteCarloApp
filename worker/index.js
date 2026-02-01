@@ -1173,98 +1173,312 @@ async function handleScheduled(event, env) {
  * Fetch comprehensive consensus data for a ticker from FMP
  * Returns the full data structure matching the frontend's fetchConsensusData
  */
+/**
+ * Fetch complete consensus data for a ticker - mirrors frontend fmpService.js
+ * Makes 13 API calls to get all financial data
+ */
 async function fetchFullFMPConsensus(ticker, apiKey) {
   const startTime = Date.now();
   const requestId = `cron-${crypto.randomUUID().slice(0, 8)}`;
 
+  // Helper functions for field name variations (same as frontend fmpService.js)
+  const getRevenue = (obj) =>
+    obj?.estimatedRevenueAvg || obj?.revenueAvg || obj?.revenue ||
+    obj?.estimatedRevenueLow || obj?.estimatedRevenueHigh || 0;
+
+  const getEps = (obj) =>
+    obj?.estimatedEpsAvg || obj?.epsAvg || obj?.eps ||
+    obj?.estimatedEpsLow || obj?.estimatedEpsHigh || 0;
+
+  const getEbitda = (obj) =>
+    obj?.estimatedEbitdaAvg || obj?.ebitdaAvg || obj?.ebitda ||
+    obj?.estimatedEbitdaLow || obj?.estimatedEbitdaHigh || null;
+
+  const getNetIncome = (obj) =>
+    obj?.estimatedNetIncomeAvg || obj?.netIncomeAvg || obj?.netIncome ||
+    obj?.estimatedNetIncomeLow || obj?.estimatedNetIncomeHigh || null;
+
+  const getEbit = (obj) =>
+    obj?.estimatedEbitAvg || obj?.ebitAvg || obj?.ebit ||
+    obj?.estimatedEbitLow || obj?.estimatedEbitHigh || null;
+
+  const getGrossProfit = (obj) =>
+    obj?.estimatedGrossProfitAvg || obj?.grossProfitAvg || obj?.grossProfit ||
+    obj?.estimatedGrossProfitLow || obj?.estimatedGrossProfitHigh || null;
+
+  const extractFiscalYear = (dateStr) => {
+    if (!dateStr) return null;
+    const year = parseInt(dateStr.substring(0, 4), 10);
+    return isNaN(year) ? null : year;
+  };
+
   try {
-    // Fetch all endpoints in parallel (using query params like frontend fmpService.js)
-    const [estimates, quote, ev, metrics, priceTargets, ratings, growth] = await Promise.all([
+    // Fetch all 13 endpoints in parallel (same as frontend fmpService.js)
+    const [
+      estimatesRaw, quoteRaw, evRaw, metricsRaw, incomeRaw,
+      priceTargetsRaw, ratingsRaw, growthRaw, earningsRaw,
+      ratiosTtmRaw, ratiosAnnualRaw, cashFlowRaw, balanceSheetRaw
+    ] = await Promise.all([
       fetchFMPStableEndpoint(`/analyst-estimates?symbol=${ticker}&period=annual&limit=5`, apiKey, requestId),
       fetchFMPStableEndpoint(`/quote?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/enterprise-values?symbol=${ticker}&limit=1`, apiKey, requestId),
       fetchFMPStableEndpoint(`/key-metrics?symbol=${ticker}&period=ttm`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/income-statement?symbol=${ticker}&period=annual&limit=6`, apiKey, requestId),
       fetchFMPStableEndpoint(`/price-target-consensus?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/grades-consensus?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/financial-growth?symbol=${ticker}&limit=3`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/earnings?symbol=${ticker}&limit=20`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/ratios-ttm?symbol=${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/ratios?symbol=${ticker}&period=annual&limit=3`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/cash-flow-statement?symbol=${ticker}&period=annual&limit=5`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/balance-sheet-statement?symbol=${ticker}&period=annual&limit=1`, apiKey, requestId),
     ]);
 
     const duration = Date.now() - startTime;
 
-    // Check if we have minimum required data
-    const latestQuote = Array.isArray(quote) ? quote[0] : quote;
-    const latestEstimates = Array.isArray(estimates) && estimates.length > 0 ? estimates[0] : null;
+    // Extract arrays
+    const quote = Array.isArray(quoteRaw) ? quoteRaw[0] : quoteRaw;
+    const ev = Array.isArray(evRaw) ? evRaw[0] : evRaw;
+    const metrics = Array.isArray(metricsRaw) ? metricsRaw[0] : metricsRaw;
+    const priceTargets = priceTargetsRaw;
+    const ratings = Array.isArray(ratingsRaw) ? ratingsRaw[0] : ratingsRaw;
+    const growthData = Array.isArray(growthRaw) ? growthRaw : [];
+    const ratiosTtm = Array.isArray(ratiosTtmRaw) ? ratiosTtmRaw[0] : ratiosTtmRaw;
+    const ratiosAnnual = Array.isArray(ratiosAnnualRaw) ? ratiosAnnualRaw : [];
+    const income = Array.isArray(incomeRaw) ? incomeRaw : [];
+    const cashFlow = Array.isArray(cashFlowRaw) ? cashFlowRaw : [];
+    const balanceSheet = Array.isArray(balanceSheetRaw) ? balanceSheetRaw[0] : balanceSheetRaw;
+    const earnings = Array.isArray(earningsRaw) ? earningsRaw : [];
 
-    if (!latestQuote && !latestEstimates) {
+    if (!quote && (!estimatesRaw || estimatesRaw.length === 0)) {
       log.warn('[FMP Full] No data found', { ticker, duration });
       return { failed: true, error: 'No quote or estimates data' };
     }
 
-    // Extract key values
-    const price = latestQuote?.price || 0;
-    const marketCap = latestQuote?.marketCap || 0;
-    const latestEV = Array.isArray(ev) ? ev[0] : ev;
-    const latestMetrics = Array.isArray(metrics) ? metrics[0] : metrics;
-    const latestGrowth = Array.isArray(growth) ? growth[0] : growth;
+    // Process estimates (sort by date ascending for future estimates)
+    const today = new Date();
+    const sixMonthsAgo = new Date(today.getTime() - 180 * 24 * 60 * 60 * 1000);
+    const cutoffDate = sixMonthsAgo.toISOString().split('T')[0];
+    const estimatesArray = Array.isArray(estimatesRaw) ? estimatesRaw : [];
+    const relevantEstimates = estimatesArray.filter(d => d.date && d.date > cutoffDate);
+    const estimatesToUse = relevantEstimates.length > 0 ? relevantEstimates : estimatesArray;
+    const sortedEstimates = [...estimatesToUse].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
-    // Calculate forward PE
-    const fy1Eps = latestEstimates?.estimatedEpsAvg || latestEstimates?.estimatedEpsLow;
-    const forwardPE = (price && fy1Eps && fy1Eps > 0) ? price / fy1Eps : null;
+    const fy1Data = sortedEstimates[0] || null;
+    const fy2Data = sortedEstimates[1] || null;
+    const fy3Data = sortedEstimates[2] || null;
 
-    // Build ratings summary
-    const latestRatings = Array.isArray(ratings) ? ratings[0] : ratings;
-    const analystCount = latestRatings
-      ? (latestRatings.strongBuy || 0) + (latestRatings.buy || 0) +
-        (latestRatings.hold || 0) + (latestRatings.sell || 0) + (latestRatings.strongSell || 0)
+    // Extract quote data
+    const price = quote?.price || 0;
+    const marketCap = quote?.marketCap || 0;
+
+    // Process income statement for historical data and reporting currency
+    const sortedIncome = [...income].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const latestIncome = sortedIncome[0];
+    const reportingCurrency = latestIncome?.reportedCurrency || balanceSheet?.reportedCurrency || 'USD';
+
+    // Build income historical time series
+    const incomeHistorical = sortedIncome.map(d => ({
+      year: d.calendarYear || extractFiscalYear(d.date),
+      date: d.date,
+      revenue: d.revenue,
+      grossProfit: d.grossProfit,
+      grossMargin: d.grossProfitRatio || (d.revenue ? d.grossProfit / d.revenue : null),
+      operatingIncome: d.operatingIncome,
+      operatingMargin: d.operatingIncomeRatio || (d.revenue ? d.operatingIncome / d.revenue : null),
+      ebitda: d.ebitda || (d.operatingIncome && d.depreciationAndAmortization
+        ? d.operatingIncome + d.depreciationAndAmortization : null),
+      netIncome: d.netIncome,
+      netMargin: d.netIncomeRatio || (d.revenue ? d.netIncome / d.revenue : null),
+      eps: d.eps || d.epsdiluted,
+    }));
+
+    // Find prior year data for growth calculations
+    const fy1FiscalYear = fy1Data ? extractFiscalYear(fy1Data.date) : null;
+    let priorYearData = sortedIncome.find(h => h.calendarYear === fy1FiscalYear - 1);
+    if (!priorYearData && fy1FiscalYear) {
+      priorYearData = sortedIncome.find(h => (h.calendarYear || extractFiscalYear(h.date)) < fy1FiscalYear);
+    }
+    if (!priorYearData && sortedIncome.length > 0) {
+      priorYearData = sortedIncome[0];
+    }
+
+    // Process balance sheet
+    const shortTermDebt = balanceSheet?.shortTermDebt || balanceSheet?.shortTermBorrowings || 0;
+    const longTermDebt = balanceSheet?.longTermDebt || 0;
+    const totalDebt = balanceSheet?.totalDebt || (shortTermDebt + longTermDebt);
+    const cash = balanceSheet?.cashAndCashEquivalents || balanceSheet?.cashAndShortTermInvestments || 0;
+    const netDebt = totalDebt - cash;
+
+    // Calculate enterprise value
+    const calculatedEV = marketCap + netDebt;
+    const enterpriseValue = calculatedEV > 0 ? calculatedEV : (ev?.enterpriseValue || marketCap);
+
+    // Process cash flow
+    const sortedCashFlow = [...cashFlow].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const latestCashFlow = sortedCashFlow[0];
+    const cashFlowHistorical = sortedCashFlow.map(d => ({
+      year: d.calendarYear || extractFiscalYear(d.date),
+      date: d.date,
+      operatingCashFlow: d.operatingCashFlow || 0,
+      capitalExpenditure: d.capitalExpenditure,
+      freeCashFlow: d.freeCashFlow || ((d.operatingCashFlow || 0) - Math.abs(d.capitalExpenditure || 0)),
+      netIncome: d.netIncome || 0,
+      dividendsPaid: d.dividendsPaid,
+      stockRepurchases: d.commonStockRepurchased,
+    }));
+
+    // Process earnings calendar
+    const todayStr = today.toISOString().split('T')[0];
+    const sortedEarnings = [...earnings].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const historicalEarnings = sortedEarnings.filter(e => e.epsActual != null && e.epsEstimated != null);
+    const recentWithActuals = historicalEarnings.slice(0, 4);
+    const surprises = recentWithActuals
+      .map(e => (e.epsActual != null && e.epsEstimated != null && e.epsEstimated !== 0)
+        ? (e.epsActual - e.epsEstimated) / Math.abs(e.epsEstimated) : null)
+      .filter(s => s != null);
+    const avgSurprise = surprises.length > 0 ? surprises.reduce((a, b) => a + b, 0) / surprises.length : null;
+    const upcomingEarnings = sortedEarnings
+      .filter(e => e.date && e.date >= todayStr && e.epsActual == null)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const nextEarnings = upcomingEarnings[0] || null;
+
+    // Process growth (3Y average)
+    const avgGrowth = (field) => {
+      const values = growthData.map(d => d[field]).filter(v => v != null && !isNaN(v));
+      return values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : null;
+    };
+
+    // Build ratings
+    const analystCount = ratings
+      ? (ratings.strongBuy || 0) + (ratings.buy || 0) + (ratings.hold || 0) + (ratings.sell || 0) + (ratings.strongSell || 0)
       : null;
-
-    // Get consensus rating string
     let consensusRating = null;
-    if (latestRatings) {
-      const buyWeight = (latestRatings.strongBuy || 0) * 2 + (latestRatings.buy || 0);
-      const sellWeight = (latestRatings.strongSell || 0) * 2 + (latestRatings.sell || 0);
-      const holdWeight = latestRatings.hold || 0;
+    if (ratings) {
+      const buyWeight = (ratings.strongBuy || 0) * 2 + (ratings.buy || 0);
+      const sellWeight = (ratings.strongSell || 0) * 2 + (ratings.sell || 0);
+      const holdWeight = ratings.hold || 0;
       if (buyWeight > sellWeight + holdWeight) consensusRating = 'Buy';
       else if (sellWeight > buyWeight + holdWeight) consensusRating = 'Sell';
       else consensusRating = 'Hold';
     }
 
-    // Price target consensus
     const priceTargetConsensus = priceTargets?.targetConsensus || priceTargets?.priceTargetConsensus || null;
 
-    // Build the full data object (matches frontend structure)
+    // Build FY estimates with margins
+    const buildFyData = (obj) => {
+      if (!obj) return null;
+      const revenue = getRevenue(obj);
+      const ebit = getEbit(obj);
+      const ebitda = getEbitda(obj);
+      const netIncome = getNetIncome(obj);
+      const grossProfit = getGrossProfit(obj);
+      return {
+        fiscalYear: extractFiscalYear(obj.date),
+        date: obj.date,
+        revenue,
+        grossProfit,
+        ebit,
+        ebitda,
+        netIncome,
+        eps: getEps(obj),
+        grossMargin: revenue && grossProfit ? grossProfit / revenue : null,
+        ebitMargin: revenue && ebit ? ebit / revenue : null,
+        ebitdaMargin: revenue && ebitda ? ebitda / revenue : null,
+        netMargin: revenue && netIncome ? netIncome / revenue : null,
+      };
+    };
+
+    const fy1 = buildFyData(fy1Data);
+    const fy2 = buildFyData(fy2Data);
+    const fy3 = buildFyData(fy3Data);
+
+    // Build the full data object (matches frontend structure exactly)
     const fullData = {
       ticker,
-      name: latestQuote?.name || ticker,
+      name: quote?.name || ticker,
       price,
       marketCap,
-      enterpriseValue: latestEV?.enterpriseValue,
-      changesPercentage: latestQuote?.changesPercentage || 0,
+      enterpriseValue,
+      changesPercentage: quote?.changesPercentage || 0,
 
-      // FY1 estimates
-      fy1: latestEstimates ? {
-        fiscalYear: new Date(latestEstimates.date).getFullYear(),
-        date: latestEstimates.date,
-        revenue: latestEstimates.estimatedRevenueAvg || latestEstimates.estimatedRevenueLow,
-        eps: fy1Eps,
-        ebitda: latestEstimates.estimatedEbitdaAvg || latestEstimates.estimatedEbitdaLow,
-        netIncome: latestEstimates.estimatedNetIncomeAvg || latestEstimates.estimatedNetIncomeLow,
+      // FY estimates
+      fy1,
+      fy2,
+      fy0: priorYearData ? {
+        fiscalYear: priorYearData.calendarYear || extractFiscalYear(priorYearData.date),
+        revenue: priorYearData.revenue,
+        eps: priorYearData.eps || priorYearData.epsdiluted,
+        netIncome: priorYearData.netIncome,
       } : null,
 
-      // FY2 estimates (second in array)
-      fy2: (Array.isArray(estimates) && estimates.length > 1) ? {
-        date: estimates[1].date,
-        revenue: estimates[1].estimatedRevenueAvg || estimates[1].estimatedRevenueLow,
-        eps: estimates[1].estimatedEpsAvg || estimates[1].estimatedEpsLow,
-        ebitda: estimates[1].estimatedEbitdaAvg || estimates[1].estimatedEbitdaLow,
-        netIncome: estimates[1].estimatedNetIncomeAvg || estimates[1].estimatedNetIncomeLow,
-      } : null,
-
-      // Multiples
+      // Forward valuation multiples
       multiples: {
-        forwardPE,
-        evToEbitda: latestMetrics?.evToEbitda,
-        priceToSales: latestMetrics?.priceToSalesRatio,
+        fy1PE: fy1?.eps ? price / fy1.eps : null,
+        fy1EvToEbitda: fy1?.ebitda ? enterpriseValue / fy1.ebitda : null,
+        fy1EvToEbit: fy1?.ebit ? enterpriseValue / fy1.ebit : null,
+        fy1PriceToSales: fy1?.revenue ? marketCap / fy1.revenue : null,
+        fy1EvToSales: fy1?.revenue ? enterpriseValue / fy1.revenue : null,
+        fy2PE: fy2?.eps ? price / fy2.eps : null,
+        fy2EvToEbitda: fy2?.ebitda ? enterpriseValue / fy2.ebitda : null,
+        fy2EvToEbit: fy2?.ebit ? enterpriseValue / fy2.ebit : null,
+        fy2PriceToSales: fy2?.revenue ? marketCap / fy2.revenue : null,
+        fy2EvToSales: fy2?.revenue ? enterpriseValue / fy2.revenue : null,
+        forwardPE: fy1?.eps ? price / fy1.eps : null,
+        evToEbitda: metrics?.enterpriseValueOverEBITDATTM || metrics?.evToEbitda,
+        priceToSales: metrics?.priceToSalesRatio,
+      },
+
+      // Historical metrics
+      historical: {
+        grossMargin: metrics?.grossProfitMargin || latestIncome?.grossProfitRatio,
+        operatingMargin: metrics?.operatingProfitMargin || latestIncome?.operatingIncomeRatio,
+        netMargin: metrics?.netProfitMargin || latestIncome?.netIncomeRatio,
+        peRatio: metrics?.peRatio,
+        pbRatio: metrics?.pbRatio,
+        evToEbitda: metrics?.enterpriseValueOverEBITDATTM,
+      },
+
+      // Profitability & Returns
+      profitability: {
+        roe: metrics?.roe || ratiosTtm?.returnOnEquityTTM,
+        roa: metrics?.roa || ratiosTtm?.returnOnAssetsTTM,
+        roic: metrics?.roic || ratiosTtm?.returnOnCapitalEmployedTTM,
+        freeCashFlowYield: ratiosTtm?.priceToFreeCashFlowsRatioTTM
+          ? 1 / ratiosTtm.priceToFreeCashFlowsRatioTTM : null,
+      },
+
+      // Balance Sheet Health
+      health: {
+        debtToEquity: metrics?.debtToEquity || ratiosTtm?.debtEquityRatioTTM,
+        currentRatio: metrics?.currentRatio || ratiosTtm?.currentRatioTTM,
+        quickRatio: metrics?.quickRatio || ratiosTtm?.quickRatioTTM,
+        interestCoverage: ratiosTtm?.interestCoverageTTM,
+      },
+
+      // Cash Flow
+      cashFlow: {
+        freeCashFlow: latestCashFlow?.freeCashFlow,
+        operatingCashFlow: latestCashFlow?.operatingCashFlow,
+        capitalExpenditure: latestCashFlow?.capitalExpenditure,
+        priceToFCF: ratiosTtm?.priceToFreeCashFlowsRatioTTM,
+        fcfYield: ratiosTtm?.priceToFreeCashFlowsRatioTTM
+          ? 1 / ratiosTtm.priceToFreeCashFlowsRatioTTM : null,
+        fcfMargin: (latestCashFlow?.freeCashFlow && latestIncome?.revenue)
+          ? latestCashFlow.freeCashFlow / latestIncome.revenue : null,
+        historical: cashFlowHistorical,
+      },
+
+      // Balance sheet data
+      balanceSheet: {
+        totalDebt,
+        shortTermDebt,
+        longTermDebt,
+        cashAndEquivalents: cash,
+        netDebt,
+        totalAssets: balanceSheet?.totalAssets || 0,
+        totalLiabilities: balanceSheet?.totalLiabilities || 0,
+        totalEquity: balanceSheet?.totalStockholdersEquity || balanceSheet?.totalEquity || 0,
       },
 
       // Price targets
@@ -1276,36 +1490,55 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         upside: (price && priceTargetConsensus) ? (priceTargetConsensus - price) / price : null,
       } : null,
 
-      // Ratings
-      ratings: latestRatings ? {
-        strongBuy: latestRatings.strongBuy,
-        buy: latestRatings.buy,
-        hold: latestRatings.hold,
-        sell: latestRatings.sell,
-        strongSell: latestRatings.strongSell,
+      // Analyst ratings
+      ratings: ratings ? {
+        strongBuy: ratings.strongBuy,
+        buy: ratings.buy,
+        hold: ratings.hold,
+        sell: ratings.sell,
+        strongSell: ratings.strongSell,
         consensus: consensusRating,
         totalAnalysts: analystCount,
       } : null,
 
-      // Growth
-      growth: latestGrowth ? {
-        revenue: latestGrowth.revenueGrowth,
-        eps: latestGrowth.epsgrowth,
-        netIncome: latestGrowth.netIncomeGrowth,
-      } : null,
+      // Historical growth rates
+      growth: {
+        revenue: avgGrowth('revenueGrowth'),
+        eps: avgGrowth('epsgrowth'),
+        ebit: avgGrowth('ebitgrowth'),
+        netIncome: avgGrowth('netIncomeGrowth'),
+        periods: growthData.length,
+      },
 
-      // Health metrics
-      health: {
-        debtToEquity: latestMetrics?.debtToEquity,
-        currentRatio: latestMetrics?.currentRatio,
+      // Earnings calendar
+      earnings: {
+        nextDate: nextEarnings?.date || null,
+        nextEpsEstimate: nextEarnings?.epsEstimated ?? null,
+        lastSurprise: surprises[0] ?? null,
+        avgSurprise,
+        beatCount: surprises.filter(s => s > 0).length,
+        missCount: surprises.filter(s => s < 0).length,
+      },
+
+      // Currency info
+      currency: {
+        reporting: reportingCurrency,
+        trading: 'USD',
+      },
+
+      // Time series data
+      timeSeries: {
+        historical: incomeHistorical,
+        forward: sortedEstimates.map(buildFyData),
+        fy3,
       },
 
       // Metadata
       fetchedAt: new Date().toISOString(),
-      partial: !latestEstimates || !latestRatings || !priceTargets,
+      partial: !fy1 || !ratings || !priceTargets,
     };
 
-    log.info('[FMP Full] Fetched', { ticker, duration, hasEstimates: !!latestEstimates, hasRatings: !!latestRatings });
+    log.info('[FMP Full] Fetched complete data', { ticker, duration, fy1Rev: fy1?.revenue, hasBalanceSheet: !!balanceSheet });
 
     return fullData;
 
