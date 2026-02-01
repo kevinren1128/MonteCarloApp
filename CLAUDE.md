@@ -616,6 +616,17 @@ Key endpoints used:
     - Added sanity check: if EV or revenue > $10T, force fallback conversion
     - Symptom: TSM showing $3.8T revenue instead of ~$118B (displayed TWD as USD)
 
+12. **Staleness indicator uses stale closures**
+    - `clearStaleTab` calls `markTabComputed` which captures `inputVersions` in its closure
+    - During long-running operations like `runFullLoad`, positions update mid-flight
+    - This bumps `inputVersions.positions` AFTER the captured `clearStaleTab` was defined
+    - Result: Tab marked computed with old versions → still shows stale
+    - **Solution**: `inputVersionsRef` + deferred effect pattern
+      - `inputVersionsRef` always has latest values (updated by useEffect)
+      - `markTabComputed` reads from ref instead of closure (empty deps)
+      - Deferred effect: set pending flag when `isFullLoading` → false, then mark tabs fresh when `inputVersions` changes
+    - Pattern: When detecting state transitions, use a flag + separate effect that depends on the thing you're waiting for
+
 ### What We Tried That Didn't Work
 
 1. **Calling refreshAllPrices directly from login effect**
@@ -629,6 +640,17 @@ Key endpoints used:
 3. **Caching FX-converted prices in KV with currency in key**
    - Problem: Same data cached twice (with/without conversion)
    - Solution: Cache raw data, do FX conversion on each request
+
+4. **Marking tabs fresh when isFullLoading becomes false**
+   - Problem: useEffect runs, but `inputVersions` hasn't been bumped yet (position update effect runs after)
+   - Tried: useEffect on `[isFullLoading, clearStaleTab]` that calls `clearStaleTab` when `isFullLoading` → false
+   - Result: Still stale because versions bump AFTER the effect runs
+   - Solution: Deferred pattern - set flag when loading ends, mark fresh when `inputVersions` changes
+
+5. **useEffect declared before state it depends on**
+   - Problem: "Cannot access 'isFullLoading' before initialization" ReferenceError
+   - Cause: useEffect referencing state variable that's declared later in the component
+   - Solution: Move useEffect to after all the useState declarations it depends on
 
 ---
 
