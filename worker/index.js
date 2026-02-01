@@ -1240,7 +1240,7 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
     const quote = Array.isArray(quoteRaw) ? quoteRaw[0] : quoteRaw;
     const ev = Array.isArray(evRaw) ? evRaw[0] : evRaw;
     const metrics = Array.isArray(metricsRaw) ? metricsRaw[0] : metricsRaw;
-    const priceTargets = priceTargetsRaw;
+    const priceTargets = Array.isArray(priceTargetsRaw) ? priceTargetsRaw[0] : priceTargetsRaw;
     const ratings = Array.isArray(ratingsRaw) ? ratingsRaw[0] : ratingsRaw;
     const growthData = Array.isArray(growthRaw) ? growthRaw : [];
     const ratiosTtm = Array.isArray(ratiosTtmRaw) ? ratiosTtmRaw[0] : ratiosTtmRaw;
