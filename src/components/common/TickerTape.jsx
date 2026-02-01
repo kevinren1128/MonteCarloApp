@@ -8,18 +8,35 @@
  * - Continuous smooth scrolling animation
  * - Two sections: Portfolio positions and Market ETFs
  * - Clear visual dividers between sections
+ * - Price change animations (flash green/red on update)
+ * - Market open/closed indicator
  * - Shows behind sidebar (z-index: 50 vs sidebar's 100)
- * - Matches app theme with gradient background
  */
 
-import React, { memo, useMemo } from 'react';
+import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
 
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 const TICKER_HEIGHT = 28;
-const ANIMATION_DURATION = 45; // seconds for full scroll (longer with more items)
+const ANIMATION_DURATION = 45; // seconds for full scroll
 
 // Key market ETFs to always show
-const MARKET_ETFS = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'GLD', 'TLT', 'VIX'];
+const MARKET_ETFS = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'GLD', 'TLT'];
+
+// Check if US markets are open (NYSE/NASDAQ: 9:30 AM - 4:00 PM ET, weekdays)
+const isMarketOpen = () => {
+  const now = new Date();
+  const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = etTime.getDay();
+  const hours = etTime.getHours();
+  const minutes = etTime.getMinutes();
+  const timeInMinutes = hours * 60 + minutes;
+
+  // Weekdays only (Mon-Fri)
+  if (day === 0 || day === 6) return false;
+
+  // Market hours: 9:30 AM (570 min) to 4:00 PM (960 min) ET
+  return timeInMinutes >= 570 && timeInMinutes < 960;
+};
 
 // Format price with appropriate decimals
 const formatPrice = (price) => {
@@ -35,6 +52,42 @@ const formatChange = (change) => {
   const sign = change >= 0 ? '+' : '';
   return `${sign}${(change * 100).toFixed(1)}%`;
 };
+
+// Market status indicator
+const MarketStatus = ({ isOpen }) => (
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '0 12px',
+      marginRight: '8px',
+      borderRight: '1px solid rgba(255, 255, 255, 0.1)',
+    }}
+  >
+    <div
+      style={{
+        width: '6px',
+        height: '6px',
+        borderRadius: '50%',
+        background: isOpen ? '#00ff88' : '#666',
+        boxShadow: isOpen ? '0 0 8px rgba(0, 255, 136, 0.6)' : 'none',
+        animation: isOpen ? 'pulse 2s ease-in-out infinite' : 'none',
+      }}
+    />
+    <span
+      style={{
+        fontSize: '9px',
+        fontWeight: '600',
+        color: isOpen ? '#00ff88' : '#666',
+        letterSpacing: '0.5px',
+        textTransform: 'uppercase',
+      }}
+    >
+      {isOpen ? 'OPEN' : 'CLOSED'}
+    </span>
+  </div>
+);
 
 // Section divider component
 const SectionDivider = ({ label, color }) => (
@@ -77,60 +130,85 @@ const SectionDivider = ({ label, color }) => (
   </div>
 );
 
-// Single ticker item component
-const TickerItem = ({ ticker, price, change, isPortfolio }) => (
-  <div
-    style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px',
-      padding: '0 16px',
-      borderRight: '1px solid rgba(255, 255, 255, 0.03)',
-    }}
-  >
-    {/* Ticker Symbol */}
-    <span
+// Single ticker item component with price change animation
+const TickerItem = ({ ticker, price, change, isPortfolio, priceDirection }) => {
+  // Flash effect based on price direction
+  const flashColor = priceDirection === 'up' ? 'rgba(0, 255, 136, 0.3)'
+    : priceDirection === 'down' ? 'rgba(255, 68, 102, 0.3)'
+    : 'transparent';
+
+  return (
+    <div
       style={{
-        fontSize: '11px',
-        fontWeight: '600',
-        color: isPortfolio ? '#00d4ff' : '#a78bfa', // Cyan for portfolio, purple for markets
-        letterSpacing: '0.5px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '0 16px',
+        borderRight: '1px solid rgba(255, 255, 255, 0.03)',
+        background: flashColor,
+        transition: 'background 0.5s ease-out',
       }}
     >
-      {ticker}
-    </span>
-
-    {/* Price */}
-    <span
-      style={{
-        fontSize: '11px',
-        color: '#e0e0e0',
-      }}
-    >
-      ${formatPrice(price)}
-    </span>
-
-    {/* Change (if available) */}
-    {change !== null && (
+      {/* Ticker Symbol */}
       <span
         style={{
-          fontSize: '10px',
-          fontWeight: '500',
-          color: change >= 0 ? '#00ff88' : '#ff4466',
-          padding: '1px 4px',
-          borderRadius: '3px',
-          background: change >= 0
-            ? 'rgba(0, 255, 136, 0.1)'
-            : 'rgba(255, 68, 102, 0.1)',
+          fontSize: '11px',
+          fontWeight: '600',
+          color: isPortfolio ? '#00d4ff' : '#a78bfa',
+          letterSpacing: '0.5px',
         }}
       >
-        {formatChange(change)}
+        {ticker}
       </span>
-    )}
-  </div>
-);
+
+      {/* Price */}
+      <span
+        style={{
+          fontSize: '11px',
+          color: priceDirection === 'up' ? '#00ff88'
+            : priceDirection === 'down' ? '#ff4466'
+            : '#e0e0e0',
+          transition: 'color 0.3s ease',
+        }}
+      >
+        ${formatPrice(price)}
+      </span>
+
+      {/* Change (if available) */}
+      {change !== null && (
+        <span
+          style={{
+            fontSize: '10px',
+            fontWeight: '500',
+            color: change >= 0 ? '#00ff88' : '#ff4466',
+            padding: '1px 4px',
+            borderRadius: '3px',
+            background: change >= 0
+              ? 'rgba(0, 255, 136, 0.1)'
+              : 'rgba(255, 68, 102, 0.1)',
+          }}
+        >
+          {formatChange(change)}
+        </span>
+      )}
+    </div>
+  );
+};
 
 const TickerTape = memo(({ positions = [], marketData = {} }) => {
+  // Track previous prices to detect changes
+  const prevPricesRef = useRef({});
+  const [priceDirections, setPriceDirections] = useState({});
+  const [marketOpen, setMarketOpen] = useState(isMarketOpen());
+
+  // Update market status every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMarketOpen(isMarketOpen());
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Filter portfolio positions (exclude ETFs that are in MARKET_ETFS to avoid duplicates)
   const portfolioItems = useMemo(() => {
     return positions
@@ -146,7 +224,6 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
   // Get market ETF data from marketData or positions
   const marketItems = useMemo(() => {
     return MARKET_ETFS.map(ticker => {
-      // First check marketData (unifiedMarketData) - uses currentPrice field
       const md = marketData[ticker];
       if (md?.currentPrice) {
         return {
@@ -156,7 +233,6 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
           isPortfolio: false,
         };
       }
-      // Then check positions (user might have these ETFs)
       const pos = positions.find(p => p.ticker === ticker);
       if (pos?.price) {
         return {
@@ -166,22 +242,43 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
           isPortfolio: false,
         };
       }
-      // No data available
       return null;
     }).filter(Boolean);
   }, [marketData, positions]);
 
-  // Build the full sequence: Portfolio section + Markets section
+  // Detect price changes and update directions
+  useEffect(() => {
+    const allItems = [...portfolioItems, ...marketItems];
+    const newDirections = {};
+    let hasChanges = false;
+
+    allItems.forEach(item => {
+      const prevPrice = prevPricesRef.current[item.ticker];
+      if (prevPrice !== undefined && prevPrice !== item.price) {
+        newDirections[item.ticker] = item.price > prevPrice ? 'up' : 'down';
+        hasChanges = true;
+      }
+      prevPricesRef.current[item.ticker] = item.price;
+    });
+
+    if (hasChanges) {
+      setPriceDirections(newDirections);
+      // Clear flash after animation
+      setTimeout(() => {
+        setPriceDirections({});
+      }, 1500);
+    }
+  }, [portfolioItems, marketItems]);
+
+  // Build the full sequence
   const buildSequence = useMemo(() => {
     const sequence = [];
 
-    // Portfolio section
     if (portfolioItems.length > 0) {
       sequence.push({ type: 'divider', label: 'Portfolio', color: '#00d4ff' });
       portfolioItems.forEach(item => sequence.push({ type: 'ticker', ...item }));
     }
 
-    // Markets section
     if (marketItems.length > 0) {
       sequence.push({ type: 'divider', label: 'Markets', color: '#a78bfa' });
       marketItems.forEach(item => sequence.push({ type: 'ticker', ...item }));
@@ -190,14 +287,12 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
     return sequence;
   }, [portfolioItems, marketItems]);
 
-  // Don't render if no items
   if (buildSequence.length === 0) {
     return null;
   }
 
   // Duplicate sequence for seamless loop
   const displaySequence = useMemo(() => {
-    // Need at least 2 copies for the 50% translateX animation
     return [...buildSequence, ...buildSequence];
   }, [buildSequence]);
 
@@ -206,12 +301,13 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
       {/* CSS Animation */}
       <style>{`
         @keyframes tickerScroll {
-          0% {
-            transform: translateX(0);
-          }
-          100% {
-            transform: translateX(-50%);
-          }
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
         }
 
         .ticker-tape-container:hover .ticker-tape-content {
@@ -230,50 +326,53 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
           height: TICKER_HEIGHT,
           background: 'linear-gradient(180deg, rgba(10, 10, 20, 0.95) 0%, rgba(15, 15, 25, 0.9) 100%)',
           borderBottom: '1px solid rgba(0, 212, 255, 0.15)',
-          zIndex: 50, // Behind sidebar (z-index: 100)
+          zIndex: 50,
           overflow: 'hidden',
           fontFamily: FONT_FAMILY,
           boxShadow: '0 2px 10px rgba(0, 0, 0, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
         }}
       >
+        {/* Market Status - fixed position */}
+        <MarketStatus isOpen={marketOpen} />
+
         {/* Scrolling Content */}
         <div
-          className="ticker-tape-content"
           style={{
-            display: 'flex',
-            alignItems: 'center',
+            flex: 1,
+            overflow: 'hidden',
             height: '100%',
-            whiteSpace: 'nowrap',
-            animation: `tickerScroll ${ANIMATION_DURATION}s linear infinite`,
           }}
         >
-          {displaySequence.map((item, index) => (
-            item.type === 'divider' ? (
-              <SectionDivider key={`divider-${item.label}-${index}`} label={item.label} color={item.color} />
-            ) : (
-              <TickerItem
-                key={`${item.ticker}-${index}`}
-                ticker={item.ticker}
-                price={item.price}
-                change={item.change}
-                isPortfolio={item.isPortfolio}
-              />
-            )
-          ))}
+          <div
+            className="ticker-tape-content"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              height: '100%',
+              whiteSpace: 'nowrap',
+              animation: `tickerScroll ${ANIMATION_DURATION}s linear infinite`,
+            }}
+          >
+            {displaySequence.map((item, index) => (
+              item.type === 'divider' ? (
+                <SectionDivider key={`divider-${item.label}-${index}`} label={item.label} color={item.color} />
+              ) : (
+                <TickerItem
+                  key={`${item.ticker}-${index}`}
+                  ticker={item.ticker}
+                  price={item.price}
+                  change={item.change}
+                  isPortfolio={item.isPortfolio}
+                  priceDirection={priceDirections[item.ticker]}
+                />
+              )
+            ))}
+          </div>
         </div>
 
-        {/* Fade edges for smooth visual */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '60px',
-            height: '100%',
-            background: 'linear-gradient(90deg, rgba(10, 10, 20, 1) 0%, transparent 100%)',
-            pointerEvents: 'none',
-          }}
-        />
+        {/* Fade edge (right only now since market status is on left) */}
         <div
           style={{
             position: 'absolute',

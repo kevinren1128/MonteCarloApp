@@ -852,12 +852,14 @@ const PositionsTableCard = memo(({
     );
   };
   
-  // Sortable header component
-  const SortHeader = ({ column, label, width, align }) => {
+  // Sortable header component with optional tooltip
+  const SortHeader = ({ column, label, width, align, tooltip }) => {
     const isActive = positionSort.column === column;
+    const [showTooltip, setShowTooltip] = useState(false);
+
     return (
-      <th 
-        style={{ 
+      <th
+        style={{
           textAlign: align || 'left',
           padding: '12px 8px',
           color: isActive ? COLORS.cyan : '#666',
@@ -871,17 +873,57 @@ const PositionsTableCard = memo(({
           minWidth: width || 'auto',
           background: isActive ? 'rgba(0, 212, 255, 0.05)' : 'transparent',
           transition: 'all 0.2s ease',
+          position: 'relative',
         }}
         onClick={() => setPositionSort(prev => ({
           column,
           direction: prev.column === column && prev.direction === 'desc' ? 'asc' : 'desc'
         }))}
+        onMouseEnter={() => tooltip && setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
       >
         {label}
         {isActive && (
           <span style={{ marginLeft: '4px', color: COLORS.cyan }}>
             {positionSort.direction === 'desc' ? '↓' : '↑'}
           </span>
+        )}
+        {/* Tooltip - appears above */}
+        {tooltip && showTooltip && (
+          <div style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            marginBottom: '8px',
+            padding: '8px 12px',
+            background: 'rgba(20, 20, 35, 0.98)',
+            border: '1px solid rgba(0, 212, 255, 0.3)',
+            borderRadius: '6px',
+            color: '#e0e0e0',
+            fontSize: '11px',
+            fontWeight: '400',
+            textTransform: 'none',
+            letterSpacing: 'normal',
+            whiteSpace: 'nowrap',
+            zIndex: 1000,
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+            pointerEvents: 'none',
+          }}>
+            {tooltip}
+            {/* Arrow pointing down */}
+            <div style={{
+              position: 'absolute',
+              top: '100%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 0,
+              height: 0,
+              borderLeft: '6px solid transparent',
+              borderRight: '6px solid transparent',
+              borderTop: '6px solid rgba(0, 212, 255, 0.3)',
+            }} />
+          </div>
         )}
       </th>
     );
@@ -1049,10 +1091,10 @@ const PositionsTableCard = memo(({
               <th style={{ ...thStyle, width: colWidths.priceUsd }}>Price $</th>
               <SortHeader column="value" label="Value" width={colWidths.value} />
               <SortHeader column="weight" label="Wt%" width={colWidths.weight} />
-              <SortHeader column="beta" label="β" width={colWidths.beta} align="center" />
-              <SortHeader column="vol" label="σ" width={colWidths.vol} align="center" />
-              <SortHeader column="ytd" label="YTD" width={colWidths.ytd} align="center" />
-              <SortHeader column="1y" label="1Y" width={colWidths.oneY} align="center" />
+              <SortHeader column="beta" label="β" width={colWidths.beta} align="center" tooltip="Beta: Correlation to S&P 500. β=1 tracks market, β>1 amplifies moves" />
+              <SortHeader column="vol" label="σ" width={colWidths.vol} align="center" tooltip="Volatility: Annualized standard deviation of returns" />
+              <SortHeader column="ytd" label="YTD" width={colWidths.ytd} align="center" tooltip="Year-to-date return since Jan 1" />
+              <SortHeader column="1y" label="1Y" width={colWidths.oneY} align="center" tooltip="1-year trailing return" />
               <th style={{ ...thStyle, width: colWidths.spark, textAlign: 'center' }}>30D</th>
               <th style={{ ...thStyle, width: colWidths.action }}></th>
             </tr>
