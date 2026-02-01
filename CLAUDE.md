@@ -551,6 +551,13 @@ Key endpoints used:
    - Always delete all, then insert fresh
    - This is intentional, not a bug
 
+7. **editedCorrelation can become corrupted**
+   - After "Load All", `editedCorrelation` state may become an object (not a 2D array)
+   - When `runPortfolioOptimization()` is called without a parameter, it falls back to `editedCorrelation`
+   - If corrupted, Cholesky decomposition produces identity matrix → zero stdDev → zero delta Sharpe
+   - Solution: Added `isValidCorrelationMatrix()` validation + fallback to `correlationMatrix`
+   - Always validate correlation matrices before using them in Monte Carlo simulations
+
 ### What We Tried That Didn't Work
 
 1. **Calling refreshAllPrices directly from login effect**
@@ -575,6 +582,9 @@ Key endpoints used:
 - Fixed `positionsKey` not including currency fields (sync was skipping FX changes)
 - Added auto-sort by Value after price refresh
 - Added auto-refresh prices on login
+- Fixed delta Sharpe values zeroing out after re-running optimization analysis
+  - Root cause: `editedCorrelation` state corruption (object instead of 2D array)
+  - Fix: Added `isValidCorrelationMatrix()` validation with fallback to `correlationMatrix`
 
 **Current state:**
 - International stocks (6525.T, BESI.AS) work end-to-end
