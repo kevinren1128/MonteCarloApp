@@ -609,22 +609,8 @@ const Sidebar = memo(({
                 transition: showShortcuts ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
                 flexShrink: 0,
               }}>{tab.shortcut}</span>
-              {/* Status indicator dot - green for new content (unvisited), orange for processing */}
-              {!isActive && hasNewContent && !isProcessing && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: '6px',
-                    right: '6px',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    background: 'linear-gradient(135deg, #2ecc71, #27ae60)',
-                    boxShadow: '0 0 6px rgba(46, 204, 113, 0.5)',
-                  }}
-                  title="New content available"
-                />
-              )}
+              {/* Status indicator dots - Priority: Processing > Stale > Blocked > New Content */}
+              {/* Orange pulsing dot for processing */}
               {!isActive && isProcessing && (
                 <span
                   style={{
@@ -641,8 +627,24 @@ const Sidebar = memo(({
                   title="Processing..."
                 />
               )}
+              {/* Red dot for stale data - inputs have changed since last run (highest priority after processing) */}
+              {!isActive && isStale && !isProcessing && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '6px',
+                    right: '6px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #e74c3c, #c0392b)',
+                    boxShadow: '0 0 6px rgba(231, 76, 60, 0.5)',
+                  }}
+                  title="Data is stale - inputs have changed"
+                />
+              )}
               {/* Yellow dot for blocked - upstream needs update first */}
-              {!isActive && isBlocked && !isProcessing && !hasNewContent && (
+              {!isActive && isBlocked && !isStale && !isProcessing && (
                 <span
                   style={{
                     position: 'absolute',
@@ -657,8 +659,8 @@ const Sidebar = memo(({
                   title="Blocked - update upstream tabs first"
                 />
               )}
-              {/* Red dot for stale data - portfolio has changed since last calculation */}
-              {!isActive && isStale && !isBlocked && !isProcessing && !hasNewContent && (
+              {/* Green dot for new content (lowest priority - only when not stale/blocked/processing) */}
+              {!isActive && hasNewContent && !isStale && !isBlocked && !isProcessing && (
                 <span
                   style={{
                     position: 'absolute',
@@ -667,10 +669,10 @@ const Sidebar = memo(({
                     width: '6px',
                     height: '6px',
                     borderRadius: '50%',
-                    background: 'linear-gradient(135deg, #e74c3c, #c0392b)',
-                    boxShadow: '0 0 6px rgba(231, 76, 60, 0.5)',
+                    background: 'linear-gradient(135deg, #2ecc71, #27ae60)',
+                    boxShadow: '0 0 6px rgba(46, 204, 113, 0.5)',
                   }}
-                  title="Data is stale - inputs have changed"
+                  title="New content available"
                 />
               )}
             </button>
