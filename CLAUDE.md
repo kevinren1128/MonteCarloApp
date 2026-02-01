@@ -592,6 +592,22 @@ Key endpoints used:
    - Solution: Added `isValidCorrelationMatrix()` validation + fallback to `correlationMatrix`
    - Always validate correlation matrices before using them in Monte Carlo simulations
 
+8. **FMP API uses query params, NOT path params**
+   - WRONG: `/quote/AAPL`, `/analyst-estimates/AAPL`
+   - RIGHT: `/quote?symbol=AAPL`, `/analyst-estimates?symbol=AAPL&period=annual&limit=5`
+   - The stable API (`https://financialmodelingprep.com/stable/`) requires query parameters
+   - Path parameters return empty arrays `[]` with no error
+
+9. **Supabase upsert requires `on_conflict` parameter**
+   - PostgREST upsert: `POST /table?on_conflict=col1,col2` with `Prefer: resolution=merge-duplicates`
+   - Without `on_conflict`, the request succeeds but may not merge duplicates correctly
+   - The columns must match a UNIQUE constraint on the table
+
+10. **RLS blocks anon key from reading shared tables**
+    - `consensus_snapshots` has RLS policy for `authenticated` role only
+    - Testing with anon key returns `[]` even when data exists
+    - Use service_role key for debugging, or test via the app when logged in
+
 ### What We Tried That Didn't Work
 
 1. **Calling refreshAllPrices directly from login effect**
