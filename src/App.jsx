@@ -7334,7 +7334,7 @@ function MonteCarloSimulator() {
   return (
     <div style={styles.appRoot}>
       {/* Ticker Tape - scrolling portfolio positions and market ETFs */}
-      <TickerTape positions={positions} marketData={unifiedMarketData} />
+      <TickerTape positions={positions} marketData={unifiedMarketData} factorAnalysis={factorAnalysis} />
 
       {/* Sidebar Navigation */}
       <Sidebar

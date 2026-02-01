@@ -19,8 +19,24 @@ const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 const TICKER_HEIGHT = 28;
 const ANIMATION_DURATION = 45; // seconds for full scroll
 
-// Key market ETFs to always show
-const MARKET_ETFS = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'GLD', 'TLT'];
+// Core market ETFs (always shown)
+const CORE_ETFS = ['SPY', 'QQQ', 'IWM'];
+
+// Factor ETF mapping (factor name -> ETF ticker)
+const FACTOR_ETF_MAP = {
+  'Market': 'SPY',
+  'Size': 'IWM',
+  'Value': 'IWD',
+  'Growth': 'IWF',
+  'Momentum': 'MTUM',
+  'Quality': 'QUAL',
+  'Low Volatility': 'SPLV',
+  'Gold': 'GLD',
+  'Bonds': 'TLT',
+};
+
+// Default factor ETFs (shown when no factor analysis)
+const DEFAULT_FACTOR_ETFS = ['MTUM', 'QUAL', 'IWD', 'GLD'];
 
 // Check if US markets are open (NYSE/NASDAQ: 9:30 AM - 4:00 PM ET, weekdays)
 const isMarketOpen = () => {
@@ -195,7 +211,7 @@ const TickerItem = ({ ticker, price, change, isPortfolio, priceDirection }) => {
   );
 };
 
-const TickerTape = memo(({ positions = [], marketData = {} }) => {
+const TickerTape = memo(({ positions = [], marketData = {}, factorAnalysis = null }) => {
   // Track previous prices to detect changes
   const prevPricesRef = useRef({});
   const [priceDirections, setPriceDirections] = useState({});
@@ -209,21 +225,61 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
     return () => clearInterval(interval);
   }, []);
 
-  // Filter portfolio positions (exclude ETFs that are in MARKET_ETFS to avoid duplicates)
+  // Get list of all ETF tickers to exclude from portfolio section
+  const allMarketEtfs = useMemo(() => {
+    const etfs = new Set(CORE_ETFS);
+    Object.values(FACTOR_ETF_MAP).forEach(t => etfs.add(t));
+    DEFAULT_FACTOR_ETFS.forEach(t => etfs.add(t));
+    return etfs;
+  }, []);
+
+  // Filter portfolio positions (exclude market ETFs to avoid duplicates)
   const portfolioItems = useMemo(() => {
     return positions
-      .filter(p => p.ticker && p.price && !MARKET_ETFS.includes(p.ticker))
+      .filter(p => p.ticker && p.price && !allMarketEtfs.has(p.ticker))
       .map(p => ({
         ticker: p.ticker,
         price: p.price,
         change: p.ytdReturn || p.dayChange || null,
         isPortfolio: true,
       }));
-  }, [positions]);
+  }, [positions, allMarketEtfs]);
+
+  // Determine which factor ETFs to show, prioritized by portfolio exposure
+  const prioritizedFactorEtfs = useMemo(() => {
+    // If we have factor analysis, sort by absolute beta (highest exposure first)
+    if (factorAnalysis?.portfolioFactorBetas) {
+      const betas = factorAnalysis.portfolioFactorBetas;
+      const factorScores = Object.entries(FACTOR_ETF_MAP)
+        .filter(([factor]) => factor !== 'Market') // Exclude Market (SPY already in core)
+        .map(([factor, etf]) => ({
+          etf,
+          factor,
+          score: Math.abs(betas[factor] || 0),
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 4) // Top 4 factor exposures
+        .map(({ etf }) => etf);
+
+      return factorScores;
+    }
+
+    // Default factor ETFs when no analysis
+    return DEFAULT_FACTOR_ETFS;
+  }, [factorAnalysis]);
+
+  // Build market ETFs list: Core indices + prioritized factors
+  const marketEtfList = useMemo(() => {
+    const list = [...CORE_ETFS];
+    prioritizedFactorEtfs.forEach(etf => {
+      if (!list.includes(etf)) list.push(etf);
+    });
+    return list;
+  }, [prioritizedFactorEtfs]);
 
   // Get market ETF data from marketData or positions
   const marketItems = useMemo(() => {
-    return MARKET_ETFS.map(ticker => {
+    return marketEtfList.map(ticker => {
       const md = marketData[ticker];
       if (md?.currentPrice) {
         return {
@@ -244,7 +300,7 @@ const TickerTape = memo(({ positions = [], marketData = {} }) => {
       }
       return null;
     }).filter(Boolean);
-  }, [marketData, positions]);
+  }, [marketData, positions, marketEtfList]);
 
   // Detect price changes and update directions
   useEffect(() => {
