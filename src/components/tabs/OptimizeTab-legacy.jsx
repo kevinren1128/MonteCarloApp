@@ -24,6 +24,22 @@ const COLORS = {
 
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 
+// Helper to safely format delta Sharpe values as basis points
+// Clamps extreme values and handles NaN/Infinity
+// Returns number only (caller adds +/- sign if needed)
+const formatDeltaSharpeBps = (deltaSharpe, includeSign = false) => {
+  const val = deltaSharpe || 0;
+  // Handle NaN or Infinity
+  if (!isFinite(val)) return 0;
+  // Clamp to reasonable range: ±1.0 = ±10000 bps (±100 percentage points)
+  const clamped = Math.max(-1, Math.min(1, val));
+  const bps = Math.round(clamped * 10000);
+  if (includeSign) {
+    return bps > 0 ? `+${bps}` : `${bps}`;
+  }
+  return bps;
+};
+
 // ============================================
 // MAIN COMPONENT
 // ============================================
@@ -810,7 +826,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: '24px', fontWeight: '700', color: COLORS.green, lineHeight: 1 }}>
-                {(bestSwap.deltaMetrics?.deltaMCSharpe || 0) >= 0 ? '+' : ''}{Math.round((bestSwap.deltaMetrics?.deltaMCSharpe || 0) * 10000)} bps
+                {formatDeltaSharpeBps(bestSwap.deltaMetrics?.deltaMCSharpe, true)} bps
               </div>
               <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>ΔSharpe (MC)</div>
             </div>
@@ -818,7 +834,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
           
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginTop: '14px' }}>
             {[
-              { label: 'ΔSharpe', value: Math.round((bestSwap.deltaMetrics?.deltaMCSharpe || 0) * 10000), unit: ' bps', positive: true },
+              { label: 'ΔSharpe', value: formatDeltaSharpeBps(bestSwap.deltaMetrics?.deltaMCSharpe), unit: ' bps', positive: (bestSwap.deltaMetrics?.deltaMCSharpe || 0) > 0 },
               { label: 'ΔP(Loss)', value: (-(bestSwap.deltaMetrics?.deltaPLoss || 0) * 100).toFixed(2), unit: '%', positive: -(bestSwap.deltaMetrics?.deltaPLoss || 0) > 0 },
               { label: 'ΔVaR 5%', value: ((bestSwap.deltaMetrics?.deltaVaR5 || 0) * 100).toFixed(2), unit: '%', positive: (bestSwap.deltaMetrics?.deltaVaR5 || 0) > 0 },
               { label: 'ΔMedian', value: ((bestSwap.deltaMetrics?.deltaMedian || 0) * 100).toFixed(2), unit: '%', positive: (bestSwap.deltaMetrics?.deltaMedian || 0) > 0 },
@@ -888,7 +904,7 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
                   <span style={{ fontSize: '9px', color: '#666' }}>ΔSharpe</span>
                   <span style={{ fontSize: '12px', fontWeight: '700', color: isGood ? COLORS.green : COLORS.red, fontFamily: 'monospace' }}>
-                    {isGood ? '+' : ''}{Math.round(deltaSharpe * 10000)} bps
+                    {formatDeltaSharpeBps(deltaSharpe, true)} bps
                   </span>
                 </div>
                 <div style={{ height: '3px', background: 'rgba(0,0,0,0.3)', borderRadius: '2px', overflow: 'hidden' }}>
@@ -1046,14 +1062,14 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                           TIER {tier.label}
                         </span>
                       </div>
-                      <span style={{ 
-                        fontSize: '14px', 
-                        fontWeight: '700', 
+                      <span style={{
+                        fontSize: '14px',
+                        fontWeight: '700',
                         color: isGood ? COLORS.green : COLORS.red,
                         fontFamily: 'monospace',
                         textShadow: isGood ? '0 0 10px rgba(46, 204, 113, 0.3)' : 'none',
                       }}>
-                        {isGood ? '+' : ''}{Math.round(deltaSharpe * 10000)} bps
+                        {formatDeltaSharpeBps(deltaSharpe, true)} bps
                       </span>
                     </div>
                     
@@ -1196,15 +1212,15 @@ const TopSwapsCard = memo(({ optimizationResults, fmtPct, fmtChange }) => {
                             borderRadius: '2px',
                           }} />
                         </div>
-                        <span style={{ 
-                          fontSize: '11px', 
-                          fontWeight: '700', 
+                        <span style={{
+                          fontSize: '11px',
+                          fontWeight: '700',
                           color: isGood ? COLORS.green : COLORS.red,
                           fontFamily: 'monospace',
                           minWidth: '50px',
                           textAlign: 'right',
                         }}>
-                          {isGood ? '+' : ''}{Math.round(deltaSharpe * 10000)} bps
+                          {formatDeltaSharpeBps(deltaSharpe, true)} bps
                         </span>
                       </div>
                     </div>
@@ -1427,7 +1443,7 @@ const RiskContributionCard = memo(({ optimizationResults, fmtPct }) => {
                       <span style={{ color: '#fff', fontWeight: '600' }}>{fmtPct(weightNLV)}</span>
                       <span style={{ color: '#888' }}>iSharpe:</span>
                       <span style={{ color: (pos.iSharpe || 0) > 0 ? COLORS.green : (pos.iSharpe || 0) < 0 ? COLORS.red : '#888', fontWeight: '600' }}>
-                        {(pos.iSharpe || 0) > 0 ? '+' : ''}{Math.round((pos.iSharpe ?? 0) * 10000)} bps
+                        {formatDeltaSharpeBps(pos.iSharpe, true)} bps
                       </span>
                       <span style={{ color: '#888' }}>μ:</span>
                       <span style={{ color: (pos.mu || 0) >= 0 ? COLORS.green : COLORS.red }}>{fmtPct(pos.mu)}</span>
@@ -1506,7 +1522,7 @@ const RiskContributionCard = memo(({ optimizationResults, fmtPct }) => {
                   <td style={{ padding: '8px 6px', textAlign: 'right' }}>{fmtPct(pos.mctr)}</td>
                   <td style={{ padding: '8px 6px', textAlign: 'right' }}>{fmtPct(pos.riskContribution)}</td>
                   <td style={{ padding: '8px 6px', textAlign: 'right', fontWeight: '600', color: isPositive ? COLORS.green : isNegative ? COLORS.red : '#666' }}>
-                    {(pos.iSharpe || 0) > 0 ? '+' : ''}{Math.round((pos.iSharpe ?? 0) * 10000)} bps
+                    {formatDeltaSharpeBps(pos.iSharpe, true)} bps
                   </td>
                   <td style={{ padding: '8px 6px', textAlign: 'center', fontSize: '11px' }}>
                     {isPositive && <span title="Consider adding">⬆️</span>}
