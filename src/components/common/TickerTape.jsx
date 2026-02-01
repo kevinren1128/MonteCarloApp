@@ -13,11 +13,12 @@
  * - Shows behind sidebar (z-index: 50 vs sidebar's 100)
  */
 
-import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
+import React, { memo, useMemo, useRef, useState, useEffect, useCallback } from 'react';
 
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 const TICKER_HEIGHT = 28;
 const ANIMATION_DURATION = 45; // seconds for full scroll
+const FADE_DURATION = 0.8; // seconds for item fade in/out
 
 // Core market ETFs (always shown)
 const CORE_ETFS = ['SPY', 'QQQ', 'IWM'];
@@ -146,8 +147,20 @@ const SectionDivider = ({ label, color }) => (
   </div>
 );
 
-// Single ticker item component with price change animation
-const TickerItem = ({ ticker, price, change, isPortfolio, priceDirection }) => {
+// Single ticker item component with price change animation and fade-in support
+const TickerItem = ({ ticker, price, change, isPortfolio, priceDirection, isNew }) => {
+  // Track if this is the first render for this item (for fade-in animation)
+  const [hasAnimated, setHasAnimated] = useState(false);
+  const shouldAnimate = isNew && !hasAnimated;
+
+  // After animation plays, mark as complete
+  useEffect(() => {
+    if (isNew && !hasAnimated) {
+      const timer = setTimeout(() => setHasAnimated(true), FADE_DURATION * 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [isNew, hasAnimated]);
+
   // Flash effect based on price direction
   const flashColor = priceDirection === 'up' ? 'rgba(0, 255, 136, 0.3)'
     : priceDirection === 'down' ? 'rgba(255, 68, 102, 0.3)'
@@ -163,6 +176,7 @@ const TickerItem = ({ ticker, price, change, isPortfolio, priceDirection }) => {
         borderRight: '1px solid rgba(255, 255, 255, 0.03)',
         background: flashColor,
         transition: 'background 0.5s ease-out',
+        animation: shouldAnimate ? `tickerFadeIn ${FADE_DURATION}s ease-out forwards` : 'none',
       }}
     >
       {/* Ticker Symbol */}
@@ -216,6 +230,10 @@ const TickerTape = memo(({ positions = [], marketData = {}, factorAnalysis = nul
   const prevPricesRef = useRef({});
   const [priceDirections, setPriceDirections] = useState({});
   const [marketOpen, setMarketOpen] = useState(isMarketOpen());
+
+  // Track new tickers for fade-in animation
+  const prevTickersRef = useRef(new Set());
+  const [newTickers, setNewTickers] = useState(new Set());
 
   // Update market status every minute
   useEffect(() => {
@@ -326,6 +344,35 @@ const TickerTape = memo(({ positions = [], marketData = {}, factorAnalysis = nul
     }
   }, [portfolioItems, marketItems]);
 
+  // Detect new tickers for fade-in animation (smooth integration without interrupting scroll)
+  useEffect(() => {
+    const currentTickers = new Set([
+      ...portfolioItems.map(p => p.ticker),
+      ...marketItems.map(m => m.ticker)
+    ]);
+
+    // Find newly added tickers (skip on initial mount)
+    if (prevTickersRef.current.size > 0) {
+      const addedTickers = new Set();
+      currentTickers.forEach(ticker => {
+        if (!prevTickersRef.current.has(ticker)) {
+          addedTickers.add(ticker);
+        }
+      });
+
+      // Mark new tickers for fade-in animation
+      if (addedTickers.size > 0) {
+        setNewTickers(addedTickers);
+        // Clear "new" status after fade-in completes
+        setTimeout(() => {
+          setNewTickers(new Set());
+        }, FADE_DURATION * 1000);
+      }
+    }
+
+    prevTickersRef.current = currentTickers;
+  }, [portfolioItems, marketItems]);
+
   // Build the full sequence
   const buildSequence = useMemo(() => {
     const sequence = [];
@@ -347,9 +394,9 @@ const TickerTape = memo(({ positions = [], marketData = {}, factorAnalysis = nul
     return null;
   }
 
-  // Duplicate sequence for seamless loop
+  // Triplicate sequence for seamless loop (ensures content fills viewport during scroll)
   const displaySequence = useMemo(() => {
-    return [...buildSequence, ...buildSequence];
+    return [...buildSequence, ...buildSequence, ...buildSequence];
   }, [buildSequence]);
 
   return (
@@ -358,12 +405,17 @@ const TickerTape = memo(({ positions = [], marketData = {}, factorAnalysis = nul
       <style>{`
         @keyframes tickerScroll {
           0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
+          100% { transform: translateX(-33.333%); }
         }
 
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
+        }
+
+        @keyframes tickerFadeIn {
+          0% { opacity: 0; transform: scale(0.95); }
+          100% { opacity: 1; transform: scale(1); }
         }
 
         .ticker-tape-container:hover .ticker-tape-content {
@@ -422,6 +474,7 @@ const TickerTape = memo(({ positions = [], marketData = {}, factorAnalysis = nul
                   change={item.change}
                   isPortfolio={item.isPortfolio}
                   priceDirection={priceDirections[item.ticker]}
+                  isNew={newTickers.has(item.ticker)}
                 />
               )
             ))}
