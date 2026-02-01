@@ -1141,7 +1141,31 @@ function MonteCarloSimulator() {
   // - Correlation change → Simulation, Optimize stale (NOT Factors)
 
   const [inputVersions, setInputVersions] = useState(initialInputVersions);
-  const [tabComputedVersions, setTabComputedVersions] = useState(initialTabComputedVersions);
+
+  // Initialize tabComputedVersions based on saved data
+  // If we have saved distributions/correlation, consider them "fresh" (version 0)
+  const [tabComputedVersions, setTabComputedVersions] = useState(() => {
+    const hasDistributions = positions.some(p => p.p5 !== undefined && p.p50 !== undefined);
+    const hasCorrelation = !!editedCorrelation;
+
+    console.log('[Stale] Initializing tabComputedVersions:', {
+      hasDistributions,
+      hasCorrelation,
+      positionsSample: positions.slice(0, 2).map(p => ({ ticker: p.ticker, p5: p.p5, p50: p.p50 })),
+      editedCorrelation: editedCorrelation ? 'present' : 'null'
+    });
+
+    return {
+      // distributions is "fresh" if positions have p5/p50 values
+      distributions: { positions: hasDistributions ? 0 : -1 },
+      // correlation is "fresh" if we have editedCorrelation
+      correlation: { positions: hasCorrelation ? 0 : -1 },
+      // simulation/factors/optimize start as never
+      simulation: { positions: -1, distributions: -1, correlation: -1 },
+      factors: { positions: -1 },
+      optimize: { positions: -1, distributions: -1, correlation: -1 },
+    };
+  });
 
   // Use the staleness hook to derive status
   const { statuses: tabStatuses, getStatus, getReason, isStale, canRun } = useStaleness(inputVersions, tabComputedVersions);
@@ -1195,19 +1219,28 @@ function MonteCarloSimulator() {
 
   // Bump correlation version when editedCorrelation changes
   useEffect(() => {
-    if (!editedCorrelation) return;
+    if (!editedCorrelation) {
+      console.log('[Stale] Correlation effect: editedCorrelation is null/undefined');
+      return;
+    }
 
     const correlationKey = JSON.stringify(editedCorrelation);
 
     if (lastCorrelationKeyRef.current === '') {
+      console.log('[Stale] Correlation effect: First run, setting initial key');
       lastCorrelationKeyRef.current = correlationKey;
       return;
     }
 
     if (correlationKey !== lastCorrelationKeyRef.current) {
-      console.log('[Stale] Correlation changed, bumping version');
+      console.log('[Stale] Correlation changed, bumping version. Matrix size:',
+        editedCorrelation?.length || 0, 'x', editedCorrelation?.[0]?.length || 0);
       lastCorrelationKeyRef.current = correlationKey;
-      setInputVersions(prev => ({ ...prev, correlation: prev.correlation + 1 }));
+      setInputVersions(prev => {
+        const newVersions = { ...prev, correlation: prev.correlation + 1 };
+        console.log('[Stale] New input versions after correlation bump:', newVersions);
+        return newVersions;
+      });
     }
   }, [editedCorrelation]);
 
@@ -1224,6 +1257,14 @@ function MonteCarloSimulator() {
     }));
     console.log(`[Stale] Marked ${tabId} as computed with versions:`, newVersions);
   }, [inputVersions]);
+
+  // Debug: Log staleness status whenever it changes
+  useEffect(() => {
+    console.log('[Stale] === Status Update ===');
+    console.log('[Stale] Input versions:', inputVersions);
+    console.log('[Stale] Tab computed versions:', tabComputedVersions);
+    console.log('[Stale] Tab statuses:', tabStatuses);
+  }, [inputVersions, tabComputedVersions, tabStatuses]);
 
   // Legacy compatibility: staleTabs object for existing code
   const staleTabs = useMemo(() => ({
@@ -7497,6 +7538,10 @@ function MonteCarloSimulator() {
             generateDistributionPreview={generateDistributionPreview}
             isFetchingData={isFetchingData}
             isFetchingYearReturns={isFetchingYearReturns}
+            // Staleness tracking
+            stalenessStatus={getStatus('distributions')}
+            stalenessReason={getReason('distributions')}
+            onNavigateTab={setActiveTab}
             styles={styles}
           />
         )}

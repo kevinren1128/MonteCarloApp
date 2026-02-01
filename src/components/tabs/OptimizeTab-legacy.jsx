@@ -1,4 +1,5 @@
 import React, { memo, useState, useMemo, useRef } from 'react';
+import { StaleBanner } from '../common';
 
 /**
  * OptimizeTab - Portfolio Optimization Analysis Tab Component (v2.0)
@@ -45,6 +46,11 @@ const OptimizeTab = memo(({
   isOptimizing,
   runPortfolioOptimization,
   setOptimizationResults,
+  // Staleness tracking
+  stalenessStatus,
+  stalenessReason,
+  canRun,
+  onNavigateTab,
   styles,
 }) => {
   try {
@@ -89,6 +95,18 @@ const OptimizeTab = memo(({
     
     return (
       <div style={{ fontFamily: FONT_FAMILY }}>
+        {/* Staleness Banner */}
+        <StaleBanner
+          status={stalenessStatus}
+          reason={stalenessReason}
+          tabName="Optimization"
+          onRerun={runPortfolioOptimization}
+          rerunLabel="Run Optimization"
+          blockedTab="simulation"
+          onNavigate={onNavigateTab}
+          styles={styles}
+        />
+
         {/* Premium Settings Panel */}
         <OptimizationSettings
           riskFreeRate={riskFreeRate}

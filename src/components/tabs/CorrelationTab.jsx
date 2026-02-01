@@ -1,5 +1,6 @@
 import React, { useState, useMemo, memo, useEffect } from 'react';
 import CorrelationCellInput from '../correlation/CorrelationCellInput';
+import { StaleBanner } from '../common';
 
 /**
  * CorrelationTab - Correlation Matrix Tab Component
@@ -706,6 +707,11 @@ const CorrelationTab = ({
   // Cloud sync
   isAuthenticated,
   saveCorrelationGroupsToServer,
+
+  // Staleness tracking
+  stalenessStatus,
+  stalenessReason,
+  onNavigateTab,
 
   // Styles
   styles,
@@ -1638,6 +1644,17 @@ const CorrelationTab = ({
   
   return (
     <div>
+      {/* Staleness Banner */}
+      <StaleBanner
+        status={stalenessStatus}
+        reason={stalenessReason}
+        tabName="Correlation"
+        onRerun={fetchAndComputeCorrelation}
+        rerunLabel="Compute Correlation"
+        onNavigate={onNavigateTab}
+        styles={styles}
+      />
+
       <div style={styles.card}>
         <div style={{ ...styles.flexRow, justifyContent: 'space-between', marginBottom: '16px' }}>
           <div style={styles.cardTitle}>

@@ -1,4 +1,5 @@
 import React, { memo, useState } from 'react';
+import { StaleBanner } from '../common';
 
 /**
  * FactorsTab - Factor Analysis Tab Component (v2.0 Premium Refresh)
@@ -184,6 +185,10 @@ const FactorsTab = memo(({
   thematicSwapProgress,
   isRunningThematicSwaps,
   runThematicSwapAnalysis,
+  // Staleness tracking
+  stalenessStatus,
+  stalenessReason,
+  onNavigateTab,
   styles,
 }) => {
   try {
@@ -220,6 +225,17 @@ const FactorsTab = memo(({
     
     return (
       <div style={{ fontFamily: FONT_FAMILY }}>
+        {/* Staleness Banner */}
+        <StaleBanner
+          status={stalenessStatus}
+          reason={stalenessReason}
+          tabName="Factor Analysis"
+          onRerun={handleRunAnalysis}
+          rerunLabel="Run Factor Analysis"
+          onNavigate={onNavigateTab}
+          styles={styles}
+        />
+
         {/* Premium Header Panel */}
         <HeaderPanel
           dataReady={dataReady}

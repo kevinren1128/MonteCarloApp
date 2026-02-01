@@ -25,6 +25,9 @@ function AppContent() {
   const { state } = useAuth();
   const { isAuthenticated, isLoading } = state;
 
+  // DEV: Allow bypassing auth with ?test=true for debugging
+  const isTestMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('test') === 'true';
+
   // Show loading state while checking auth
   if (isLoading) {
     return (
@@ -65,8 +68,8 @@ function AppContent() {
     );
   }
 
-  // Show landing page for unauthenticated users
-  if (!isAuthenticated) {
+  // Show landing page for unauthenticated users (unless in test mode)
+  if (!isAuthenticated && !isTestMode) {
     return <LandingPage />;
   }
 

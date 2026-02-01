@@ -7,6 +7,7 @@
  */
 
 import React, { useMemo, memo, useCallback, useState } from 'react';
+import { StaleBanner } from '../common';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -692,6 +693,10 @@ const DistributionsTab = ({
   generateDistributionPreview,
   isFetchingData,
   isFetchingYearReturns,
+  // Staleness tracking
+  stalenessStatus,
+  stalenessReason,
+  onNavigateTab,
   styles,
 }) => {
   const [searchFilter, setSearchFilter] = useState('');
@@ -721,6 +726,17 @@ const DistributionsTab = ({
 
   return (
     <div>
+      {/* Staleness Banner - shows when positions changed since last distribution estimation */}
+      <StaleBanner
+        status={stalenessStatus}
+        reason={stalenessReason}
+        tabName="Distributions"
+        onRerun={estimateAllDistributions}
+        rerunLabel="Estimate All"
+        onNavigate={onNavigateTab}
+        styles={styles}
+      />
+
       {/* Portfolio Summary Card */}
       <PortfolioSummaryCard
         positions={positions}
