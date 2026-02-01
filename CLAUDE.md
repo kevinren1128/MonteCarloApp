@@ -608,6 +608,14 @@ Key endpoints used:
     - Testing with anon key returns `[]` even when data exists
     - Use service_role key for debugging, or test via the app when logged in
 
+11. **ADR currency conversion can fail silently**
+    - ADRs (TSM, etc.) trade in USD but report financials in local currency
+    - FMP's `reportedCurrency` field correctly identifies the currency (e.g., TWD)
+    - But FMP's forex endpoints often return empty arrays for exotic currencies
+    - Code has fallback to hardcoded rates (`FALLBACK_EXCHANGE_RATES`)
+    - Added sanity check: if EV or revenue > $10T, force fallback conversion
+    - Symptom: TSM showing $3.8T revenue instead of ~$118B (displayed TWD as USD)
+
 ### What We Tried That Didn't Work
 
 1. **Calling refreshAllPrices directly from login effect**

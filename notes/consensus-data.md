@@ -195,7 +195,15 @@ SELECT ticker, failure_count, next_retry_at FROM tracked_tickers WHERE failure_c
 
 ## Gotchas
 
-1. **Materialized View RLS**: Views bypass RLS. While this is fine for shared read-only data, the frontend Supabase client still needs explicit GRANT permissions to read the view.
+1. **ADR Currency Conversion (TSM, etc.)**:
+   - ADRs like TSM trade in USD but report financials in local currency (TWD for TSM)
+   - FMP's `reportedCurrency` field correctly identifies TWD
+   - But FMP's forex endpoints often return empty arrays for exotic currencies
+   - Solution: Fallback to hardcoded exchange rates in `FALLBACK_EXCHANGE_RATES`
+   - Added sanity check: if EV or revenue > $10T, force re-conversion with fallback rate
+   - Example: TSM revenue 3.8T TWD × 0.031 = ~$118B USD
+
+2. **Materialized View RLS**: Views bypass RLS. While this is fine for shared read-only data, the frontend Supabase client still needs explicit GRANT permissions to read the view.
 
 2. **GRANT SELECT Required**: After creating `consensus_latest` view, you MUST run:
    ```sql
