@@ -1223,14 +1223,14 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
       fetchFMPStableEndpoint(`/quote?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/enterprise-values?symbol=${ticker}&limit=1`, apiKey, requestId),
       fetchFMPStableEndpoint(`/key-metrics?symbol=${ticker}&period=ttm`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/income-statement?symbol=${ticker}&period=annual&limit=6`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/income-statement?symbol=${ticker}&period=annual&limit=10`, apiKey, requestId),
       fetchFMPStableEndpoint(`/price-target-consensus?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/grades-consensus?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/financial-growth?symbol=${ticker}&limit=3`, apiKey, requestId),
       fetchFMPStableEndpoint(`/earnings?symbol=${ticker}&limit=20`, apiKey, requestId),
       fetchFMPStableEndpoint(`/ratios-ttm?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/ratios?symbol=${ticker}&period=annual&limit=3`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/cash-flow-statement?symbol=${ticker}&period=annual&limit=5`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/cash-flow-statement?symbol=${ticker}&period=annual&limit=10`, apiKey, requestId),
       fetchFMPStableEndpoint(`/balance-sheet-statement?symbol=${ticker}&period=annual&limit=1`, apiKey, requestId),
     ]);
 
@@ -1429,23 +1429,23 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         priceToSales: metrics?.priceToSalesRatio,
       },
 
-      // Historical metrics
+      // Historical metrics (TTM - from ratios-ttm endpoint)
       historical: {
-        grossMargin: metrics?.grossProfitMargin || latestIncome?.grossProfitRatio,
-        operatingMargin: metrics?.operatingProfitMargin || latestIncome?.operatingIncomeRatio,
-        netMargin: metrics?.netProfitMargin || latestIncome?.netIncomeRatio,
-        peRatio: metrics?.peRatio,
-        pbRatio: metrics?.pbRatio,
-        evToEbitda: metrics?.enterpriseValueOverEBITDATTM,
+        grossMargin: ratiosTtm?.grossProfitMarginTTM || latestIncome?.grossProfitRatio,
+        operatingMargin: ratiosTtm?.operatingProfitMarginTTM || latestIncome?.operatingIncomeRatio,
+        netMargin: ratiosTtm?.netProfitMarginTTM || latestIncome?.netIncomeRatio,
+        peRatio: ratiosTtm?.priceToEarningsRatioTTM || metrics?.peRatio,
+        pbRatio: ratiosTtm?.priceToBookRatioTTM || metrics?.pbRatio,
+        evToEbitda: metrics?.evToEBITDA,
       },
 
-      // Profitability & Returns
+      // Profitability & Returns (TTM)
       profitability: {
-        roe: metrics?.roe || ratiosTtm?.returnOnEquityTTM,
-        roa: metrics?.roa || ratiosTtm?.returnOnAssetsTTM,
-        roic: metrics?.roic || ratiosTtm?.returnOnCapitalEmployedTTM,
-        freeCashFlowYield: ratiosTtm?.priceToFreeCashFlowsRatioTTM
-          ? 1 / ratiosTtm.priceToFreeCashFlowsRatioTTM : null,
+        roe: metrics?.returnOnEquity || ratiosTtm?.returnOnEquityTTM,
+        roa: metrics?.returnOnAssets || ratiosTtm?.returnOnAssetsTTM,
+        roic: metrics?.returnOnInvestedCapital || ratiosTtm?.returnOnCapitalEmployedTTM,
+        freeCashFlowYield: metrics?.freeCashFlowYield || (ratiosTtm?.priceToFreeCashFlowRatioTTM
+          ? 1 / ratiosTtm.priceToFreeCashFlowRatioTTM : null),
       },
 
       // Balance Sheet Health
@@ -1461,11 +1461,15 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         freeCashFlow: latestCashFlow?.freeCashFlow,
         operatingCashFlow: latestCashFlow?.operatingCashFlow,
         capitalExpenditure: latestCashFlow?.capitalExpenditure,
+        freeCashFlowPerShare: ratiosTtm?.freeCashFlowPerShareTTM || ratiosAnnual[0]?.freeCashFlowPerShare,
+        operatingCashFlowPerShare: ratiosTtm?.operatingCashFlowPerShareTTM || ratiosAnnual[0]?.operatingCashFlowPerShare,
         priceToFCF: ratiosTtm?.priceToFreeCashFlowsRatioTTM,
         fcfYield: ratiosTtm?.priceToFreeCashFlowsRatioTTM
           ? 1 / ratiosTtm.priceToFreeCashFlowsRatioTTM : null,
         fcfMargin: (latestCashFlow?.freeCashFlow && latestIncome?.revenue)
           ? latestCashFlow.freeCashFlow / latestIncome.revenue : null,
+        fcfConversion: (latestCashFlow?.freeCashFlow && latestIncome?.netIncome && latestIncome.netIncome !== 0)
+          ? latestCashFlow.freeCashFlow / latestIncome.netIncome : null,
         historical: cashFlowHistorical,
       },
 

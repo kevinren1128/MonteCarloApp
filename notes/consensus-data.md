@@ -88,6 +88,20 @@ Refreshed concurrently after each cron run.
 5. Refresh `consensus_latest` materialized view
 6. Cleanup snapshots older than 7 days
 
+**Data Fetched (13 FMP API calls per ticker)**:
+- `/analyst-estimates` - FY1-FY5 forward estimates
+- `/income-statement` - 6 years historical revenue/margins
+- `/balance-sheet-statement` - debt, cash, net debt, equity
+- `/cash-flow-statement` - 5 years FCF, operating CF, capex
+- `/earnings` - calendar, surprise history
+- `/ratios-ttm` & `/ratios-annual` - profitability, valuation
+- `/quote` - current price, market cap
+- `/enterprise-values` - EV calculation
+- `/key-metrics` - TTM metrics
+- `/price-target-consensus` - analyst price targets
+- `/grades-consensus` - buy/hold/sell ratings
+- `/financial-growth` - 3Y growth rates
+
 **Backoff Schedule** (for failed tickers):
 - 1st failure: retry in 1 hour
 - 2nd failure: retry in 4 hours
