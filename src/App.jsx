@@ -1127,6 +1127,10 @@ function MonteCarloSimulator() {
     }));
   }, []);
 
+  // Correlation state (needed before staleness tracking)
+  const [correlationMatrix, setCorrelationMatrix] = useState(savedData?.correlationMatrix || null);
+  const [editedCorrelation, setEditedCorrelation] = useState(savedData?.editedCorrelation || null);
+
   // ============================================
   // STALE DATA TRACKING (Version-based)
   // ============================================
@@ -1252,8 +1256,6 @@ function MonteCarloSimulator() {
     return saved !== null ? JSON.parse(saved) : true;
   });
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1920);
-  const [correlationMatrix, setCorrelationMatrix] = useState(savedData?.correlationMatrix || null);
-  const [editedCorrelation, setEditedCorrelation] = useState(savedData?.editedCorrelation || null);
   const [correlationMethod, setCorrelationMethod] = useState(savedData?.correlationMethod || 'shrinkage');
 
   // EWMA (Exponentially Weighted Moving Average) correlation toggle
