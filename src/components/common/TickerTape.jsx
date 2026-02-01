@@ -1,14 +1,14 @@
 /**
  * TickerTape Component
  *
- * A scrolling ticker tape showing portfolio positions at the top of the screen.
- * Displays tickers with their prices and daily changes, scrolling continuously
- * from right to left.
+ * A scrolling ticker tape showing portfolio positions and market ETFs
+ * at the top of the screen.
  *
  * Features:
  * - Continuous smooth scrolling animation
+ * - Two sections: Portfolio positions and Market ETFs
+ * - Clear visual dividers between sections
  * - Shows behind sidebar (z-index: 50 vs sidebar's 100)
- * - Responsive to sidebar width changes
  * - Matches app theme with gradient background
  */
 
@@ -16,7 +16,10 @@ import React, { memo, useMemo } from 'react';
 
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 const TICKER_HEIGHT = 28;
-const ANIMATION_DURATION = 30; // seconds for full scroll
+const ANIMATION_DURATION = 45; // seconds for full scroll (longer with more items)
+
+// Key market ETFs to always show
+const MARKET_ETFS = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'GLD', 'TLT', 'VIX'];
 
 // Format price with appropriate decimals
 const formatPrice = (price) => {
@@ -33,30 +36,170 @@ const formatChange = (change) => {
   return `${sign}${(change * 100).toFixed(1)}%`;
 };
 
-const TickerTape = memo(({ positions = [], sidebarWidth = 0 }) => {
-  // Filter positions with valid data and create display items
-  const tickerItems = useMemo(() => {
+// Section divider component
+const SectionDivider = ({ label, color }) => (
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '0 16px',
+      marginLeft: '8px',
+      marginRight: '8px',
+    }}
+  >
+    <div
+      style={{
+        width: '2px',
+        height: '16px',
+        background: `linear-gradient(180deg, transparent, ${color}, transparent)`,
+      }}
+    />
+    <span
+      style={{
+        fontSize: '9px',
+        fontWeight: '700',
+        color: color,
+        letterSpacing: '1.5px',
+        textTransform: 'uppercase',
+        opacity: 0.9,
+      }}
+    >
+      {label}
+    </span>
+    <div
+      style={{
+        width: '2px',
+        height: '16px',
+        background: `linear-gradient(180deg, transparent, ${color}, transparent)`,
+      }}
+    />
+  </div>
+);
+
+// Single ticker item component
+const TickerItem = ({ ticker, price, change, isPortfolio }) => (
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '0 16px',
+      borderRight: '1px solid rgba(255, 255, 255, 0.03)',
+    }}
+  >
+    {/* Ticker Symbol */}
+    <span
+      style={{
+        fontSize: '11px',
+        fontWeight: '600',
+        color: isPortfolio ? '#00d4ff' : '#a78bfa', // Cyan for portfolio, purple for markets
+        letterSpacing: '0.5px',
+      }}
+    >
+      {ticker}
+    </span>
+
+    {/* Price */}
+    <span
+      style={{
+        fontSize: '11px',
+        color: '#e0e0e0',
+      }}
+    >
+      ${formatPrice(price)}
+    </span>
+
+    {/* Change (if available) */}
+    {change !== null && (
+      <span
+        style={{
+          fontSize: '10px',
+          fontWeight: '500',
+          color: change >= 0 ? '#00ff88' : '#ff4466',
+          padding: '1px 4px',
+          borderRadius: '3px',
+          background: change >= 0
+            ? 'rgba(0, 255, 136, 0.1)'
+            : 'rgba(255, 68, 102, 0.1)',
+        }}
+      >
+        {formatChange(change)}
+      </span>
+    )}
+  </div>
+);
+
+const TickerTape = memo(({ positions = [], marketData = {} }) => {
+  // Filter portfolio positions (exclude ETFs that are in MARKET_ETFS to avoid duplicates)
+  const portfolioItems = useMemo(() => {
     return positions
-      .filter(p => p.ticker && p.price)
+      .filter(p => p.ticker && p.price && !MARKET_ETFS.includes(p.ticker))
       .map(p => ({
         ticker: p.ticker,
         price: p.price,
         change: p.ytdReturn || p.dayChange || null,
-        currency: p.currency || 'USD',
+        isPortfolio: true,
       }));
   }, [positions]);
 
-  // Don't render if no positions
-  if (tickerItems.length === 0) {
+  // Get market ETF data from marketData or positions
+  const marketItems = useMemo(() => {
+    return MARKET_ETFS.map(ticker => {
+      // First check marketData (unifiedMarketData) - uses currentPrice field
+      const md = marketData[ticker];
+      if (md?.currentPrice) {
+        return {
+          ticker,
+          price: md.currentPrice,
+          change: md.ytdReturn || null,
+          isPortfolio: false,
+        };
+      }
+      // Then check positions (user might have these ETFs)
+      const pos = positions.find(p => p.ticker === ticker);
+      if (pos?.price) {
+        return {
+          ticker,
+          price: pos.price,
+          change: pos.ytdReturn || pos.dayChange || null,
+          isPortfolio: false,
+        };
+      }
+      // No data available
+      return null;
+    }).filter(Boolean);
+  }, [marketData, positions]);
+
+  // Build the full sequence: Portfolio section + Markets section
+  const buildSequence = useMemo(() => {
+    const sequence = [];
+
+    // Portfolio section
+    if (portfolioItems.length > 0) {
+      sequence.push({ type: 'divider', label: 'Portfolio', color: '#00d4ff' });
+      portfolioItems.forEach(item => sequence.push({ type: 'ticker', ...item }));
+    }
+
+    // Markets section
+    if (marketItems.length > 0) {
+      sequence.push({ type: 'divider', label: 'Markets', color: '#a78bfa' });
+      marketItems.forEach(item => sequence.push({ type: 'ticker', ...item }));
+    }
+
+    return sequence;
+  }, [portfolioItems, marketItems]);
+
+  // Don't render if no items
+  if (buildSequence.length === 0) {
     return null;
   }
 
-  // Duplicate items to create seamless loop (need enough to fill screen + animation)
-  const displayItems = useMemo(() => {
-    // Repeat the items enough times to ensure smooth scrolling
-    const repeats = Math.max(4, Math.ceil(20 / tickerItems.length));
-    return Array(repeats).fill(tickerItems).flat();
-  }, [tickerItems]);
+  // Duplicate sequence for seamless loop
+  const displaySequence = useMemo(() => {
+    // Need at least 2 copies for the 50% translateX animation
+    return [...buildSequence, ...buildSequence];
+  }, [buildSequence]);
 
   return (
     <>
@@ -104,57 +247,18 @@ const TickerTape = memo(({ positions = [], sidebarWidth = 0 }) => {
             animation: `tickerScroll ${ANIMATION_DURATION}s linear infinite`,
           }}
         >
-          {displayItems.map((item, index) => (
-            <div
-              key={`${item.ticker}-${index}`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '0 20px',
-                borderRight: '1px solid rgba(255, 255, 255, 0.05)',
-              }}
-            >
-              {/* Ticker Symbol */}
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: '600',
-                  color: '#00d4ff',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                {item.ticker}
-              </span>
-
-              {/* Price */}
-              <span
-                style={{
-                  fontSize: '11px',
-                  color: '#e0e0e0',
-                }}
-              >
-                ${formatPrice(item.price)}
-              </span>
-
-              {/* Change (if available) */}
-              {item.change !== null && (
-                <span
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: '500',
-                    color: item.change >= 0 ? '#00ff88' : '#ff4466',
-                    padding: '1px 4px',
-                    borderRadius: '3px',
-                    background: item.change >= 0
-                      ? 'rgba(0, 255, 136, 0.1)'
-                      : 'rgba(255, 68, 102, 0.1)',
-                  }}
-                >
-                  {formatChange(item.change)}
-                </span>
-              )}
-            </div>
+          {displaySequence.map((item, index) => (
+            item.type === 'divider' ? (
+              <SectionDivider key={`divider-${item.label}-${index}`} label={item.label} color={item.color} />
+            ) : (
+              <TickerItem
+                key={`${item.ticker}-${index}`}
+                ticker={item.ticker}
+                price={item.price}
+                change={item.change}
+                isPortfolio={item.isPortfolio}
+              />
+            )
           ))}
         </div>
 
