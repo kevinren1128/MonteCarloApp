@@ -214,7 +214,7 @@ const Cell = memo(({ value, color, sub, align = 'right' }) => {
 
 // View tabs
 const VIEW_TABS = [
-  { id: 'estimates', label: 'Estimates', icon: '📊' },
+  { id: 'estimates', label: 'Estimates', icon: '📝' },
   { id: 'valuation', label: 'Valuation', icon: '💰' },
   { id: 'profitability', label: 'Profitability', icon: '📈' },
   { id: 'health', label: 'Health', icon: '🏥' },
@@ -1042,96 +1042,125 @@ const ConsensusTab = memo(({ positions, styles }) => {
           <div style={{ fontSize: '13px', fontWeight: '700', color: COLORS.cyan, marginBottom: '12px' }}>
             💰 Valuation Multiples (Forward Estimates)
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
-            {/* Forward P/E by FY */}
-            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
-              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }} title="Price-to-Earnings. Lower may indicate value; compare to industry peers">Forward P/E</div>
-              {timeSeries.filter(s => s.isEstimate && s.eps).slice(0, 3).map((s, i) => {
-                const pe = s.eps ? price / s.eps : null;
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
-                    <span style={{ fontSize: '12px', fontWeight: '600', color: getMultColor(pe) }}>
-                      {formatMult(pe)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+          {/* Time series table with horizontal scroll */}
+          <div style={{
+            overflowX: 'auto',
+            maxWidth: '100%',
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(255,255,255,0.2) transparent',
+          }}>
+            <table style={{ minWidth: `${120 + timeSeries.length * 85}px`, borderCollapse: 'collapse', fontSize: '11px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                  <th style={headerCellStyle}>Multiple</th>
+                  {timeSeries.map((s, i) => (
+                    <th key={i} style={yearCellStyle(s.isEstimate)}>{s.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {/* Forward P/E */}
+                <tr>
+                  <td style={headerCellStyle} title="Price-to-Earnings. Lower may indicate value; compare to industry peers">P/E</td>
+                  {timeSeries.map((s, i) => {
+                    const pe = s.eps ? price / s.eps : null;
+                    return (
+                      <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                        <span style={{ fontWeight: '600', color: getMultColor(pe) }}>
+                          {formatMult(pe)}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
 
-            {/* EV/EBITDA by FY */}
-            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
-              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }} title="Enterprise Value / EBITDA. Useful for comparing companies with different debt levels">EV/EBITDA</div>
-              {timeSeries.filter(s => s.isEstimate && s.ebitda).slice(0, 3).map((s, i) => {
-                const evEbitda = s.ebitda ? ev / s.ebitda : null;
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
-                    <span style={{ fontSize: '12px', fontWeight: '600', color: getMultColor(evEbitda, { cheap: 10, fair: 15 }) }}>
-                      {formatMult(evEbitda)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                {/* EV/EBITDA */}
+                <tr>
+                  <td style={headerCellStyle} title="Enterprise Value / EBITDA. Useful for comparing companies with different debt levels">EV/EBITDA</td>
+                  {timeSeries.map((s, i) => {
+                    const evEbitda = s.ebitda ? ev / s.ebitda : null;
+                    return (
+                      <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                        <span style={{ fontWeight: '600', color: getMultColor(evEbitda, { cheap: 10, fair: 15 }) }}>
+                          {formatMult(evEbitda)}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
 
-            {/* EV/EBIT by FY */}
-            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
-              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }}>EV/EBIT</div>
-              {timeSeries.filter(s => s.isEstimate && s.operatingIncome).slice(0, 3).map((s, i) => {
-                const evEbit = s.operatingIncome ? ev / s.operatingIncome : null;
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
-                    <span style={{ fontSize: '12px', fontWeight: '600', color: getMultColor(evEbit, { cheap: 12, fair: 20 }) }}>
-                      {formatMult(evEbit)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                {/* EV/EBIT */}
+                <tr>
+                  <td style={headerCellStyle} title="Enterprise Value / EBIT (Operating Income)">EV/EBIT</td>
+                  {timeSeries.map((s, i) => {
+                    const evEbit = s.operatingIncome ? ev / s.operatingIncome : null;
+                    return (
+                      <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                        <span style={{ fontWeight: '600', color: getMultColor(evEbit, { cheap: 12, fair: 20 }) }}>
+                          {formatMult(evEbit)}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
 
-            {/* P/S by FY */}
-            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
-              <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: '600' }} title="Price-to-Sales. Useful for unprofitable growth companies">Price/Sales</div>
-              {timeSeries.filter(s => s.isEstimate && s.revenue).slice(0, 3).map((s, i) => {
-                const ps = s.revenue ? marketCap / s.revenue : null;
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.8)' }}>{s.label}:</span>
-                    <span style={{ fontSize: '12px', fontWeight: '600' }}>
-                      {formatMult(ps)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                {/* Price/Sales */}
+                <tr>
+                  <td style={headerCellStyle} title="Price-to-Sales. Useful for unprofitable growth companies">P/Sales</td>
+                  {timeSeries.map((s, i) => {
+                    const ps = s.revenue ? marketCap / s.revenue : null;
+                    return (
+                      <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                        <span style={{ fontWeight: '600' }}>
+                          {formatMult(ps)}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+
+                {/* EV/Sales */}
+                <tr>
+                  <td style={headerCellStyle} title="Enterprise Value / Sales">EV/Sales</td>
+                  {timeSeries.map((s, i) => {
+                    const evSales = s.revenue ? ev / s.revenue : null;
+                    return (
+                      <td key={i} style={{ ...cellStyle, background: s.isEstimate ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                        <span style={{ fontWeight: '600' }}>
+                          {formatMult(evSales)}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
           </div>
 
-          {/* Additional valuation metrics */}
-          <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '12px' }}>
-            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+          {/* Additional valuation metrics - flex wrap for dynamic width */}
+          <div style={{ marginTop: '16px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px', minWidth: '80px' }}>
               <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>NTM P/E</div>
               <div style={{ fontSize: '13px', fontWeight: '700', color: getMultColor(row.multiples?.forwardPE) }}>{formatMult(row.multiples?.forwardPE)}</div>
             </div>
-            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px', minWidth: '80px' }}>
               <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>P/B</div>
               <div style={{ fontSize: '13px', fontWeight: '700' }}>{formatMult(row.cashFlow?.priceToBook || row.historical?.pbRatio)}</div>
             </div>
-            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px', minWidth: '80px' }}>
               <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }} title="Price to Free Cash Flow. Shows how much you pay for each $1 of cash generated">P/FCF</div>
               <div style={{ fontSize: '13px', fontWeight: '700' }}>{formatMult(row.cashFlow?.priceToFCF)}</div>
             </div>
-            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px', minWidth: '80px' }}>
               <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>Div Yield</div>
               <div style={{ fontSize: '13px', fontWeight: '700', fontStyle: 'italic', color: row.cashFlow?.dividendYield > 0.02 ? COLORS.green : undefined }}>{formatPct(row.cashFlow?.dividendYield)}</div>
             </div>
-            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px', minWidth: '80px' }}>
               <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }} title="FCF / Market Cap. Higher = more cash return potential">FCF Yield</div>
               <div style={{ fontSize: '13px', fontWeight: '700', fontStyle: 'italic', color: row.profitability?.freeCashFlowYield > 0.05 ? COLORS.green : undefined }}>{formatPct(row.profitability?.freeCashFlowYield)}</div>
             </div>
-            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px' }}>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>EV/Sales</div>
+            <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '10px', minWidth: '80px' }}>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginBottom: '4px' }}>EV/Sales (TTM)</div>
               <div style={{ fontSize: '13px', fontWeight: '700' }}>{formatMult(row.historical?.evToEbitda)}</div>
             </div>
           </div>
@@ -1386,7 +1415,7 @@ const ConsensusTab = memo(({ positions, styles }) => {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#fff' }}>📊 Consensus Estimates</h2>
+          <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: '#fff' }}>📋 Consensus Estimates</h2>
           <p style={{ margin: '3px 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>
             {tickers.length} positions • {tickersWithData.length} with coverage • {tickersWithoutData.length} ETFs/no data
             {lastUpdated && ` • ${lastUpdated.toLocaleTimeString()}`}
