@@ -514,6 +514,7 @@ const Sidebar = memo(({
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
+            justifyContent: 'center',
             gap: '2px',
             opacity: showLabels ? 1 : 0,
             transition: showLabels ? 'opacity 0.15s ease 0.15s' : 'opacity 0.1s ease',
@@ -522,10 +523,12 @@ const Sidebar = memo(({
           }}>
             <AnimatedPortfolioValue
               value={portfolioValue || 0}
+              isLoading={isLoading}
               style={{
                 fontSize: isMedium ? '14px' : '16px',
                 fontWeight: '700',
                 color: '#00d4ff',
+                fontVariantNumeric: 'tabular-nums',
               }}
             />
           </div>
@@ -555,17 +558,23 @@ const Sidebar = memo(({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              gap: '4px',
               fontSize: '9px',
               fontWeight: '700',
-              color: '#00d4ff',
+              color: isLoading ? 'rgba(0, 212, 255, 0.6)' : '#00d4ff',
               fontFamily: FONT_FAMILY,
+              fontVariantNumeric: 'tabular-nums',
               whiteSpace: 'nowrap',
+              minWidth: '36px', // Fixed minimum width to prevent layout shift
+              transition: 'color 0.2s ease',
             }}
           >
-            {portfolioValue >= 1e9 ? `$${(portfolioValue / 1e9).toFixed(1)}B` :
-             portfolioValue >= 1e6 ? `$${(portfolioValue / 1e6).toFixed(1)}M` :
-             portfolioValue >= 1e3 ? `$${Math.round(portfolioValue / 1e3)}K` :
-             portfolioValue > 0 ? `$${Math.round(portfolioValue)}` : '$0'}
+            {isLoading ? '⏳' : (
+              portfolioValue >= 1e9 ? `$${(portfolioValue / 1e9).toFixed(1)}B` :
+              portfolioValue >= 1e6 ? `$${(portfolioValue / 1e6).toFixed(1)}M` :
+              portfolioValue >= 1e3 ? `$${Math.round(portfolioValue / 1e3)}K` :
+              portfolioValue > 0 ? `$${Math.round(portfolioValue)}` : '$0'
+            )}
           </div>
         </div>
       </div>
