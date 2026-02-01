@@ -24,16 +24,22 @@ const COLORS = {
 
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
 
-// Helper to safely format delta Sharpe values as basis points
-// Clamps extreme values and handles NaN/Infinity
-// Returns number only (caller adds +/- sign if needed)
+// Helper to format delta Sharpe values as basis points with diagnostics
 const formatDeltaSharpeBps = (deltaSharpe, includeSign = false) => {
   const val = deltaSharpe || 0;
-  // Handle NaN or Infinity
-  if (!isFinite(val)) return 0;
-  // Clamp to reasonable range: ±1.0 = ±10000 bps (±100 percentage points)
-  const clamped = Math.max(-1, Math.min(1, val));
-  const bps = Math.round(clamped * 10000);
+
+  // Log extreme values for debugging
+  if (Math.abs(val) > 1) {
+    console.warn('⚠️ Extreme deltaSharpe detected:', val, 'raw value, which would be', Math.round(val * 10000), 'bps');
+  }
+
+  // Handle NaN or Infinity - return 0 with warning
+  if (!isFinite(val)) {
+    console.warn('⚠️ Non-finite deltaSharpe:', val);
+    return includeSign ? '0' : 0;
+  }
+
+  const bps = Math.round(val * 10000);
   if (includeSign) {
     return bps > 0 ? `+${bps}` : `${bps}`;
   }
