@@ -1317,6 +1317,26 @@ function MonteCarloSimulator() {
     wasSimulatingRef.current = isSimulating;
   }, [isSimulating, simulationResults, clearStaleTab]);
 
+  // Track previous isFullLoading state to detect completion
+  const wasFullLoadingRef = useRef(false);
+
+  // Clear stale status for ALL tabs when Load All completes
+  // This fixes the stale closure issue where clearStaleTab called during runFullLoad
+  // has outdated inputVersions (positions may have been updated during the load)
+  useEffect(() => {
+    // Detect transition from loading to not loading (completion)
+    if (wasFullLoadingRef.current && !isFullLoading) {
+      console.log('[Stale] Load All completed - marking all computed tabs fresh');
+      // Mark all tabs that were computed during the full load
+      clearStaleTab('distributions');
+      clearStaleTab('correlation');
+      clearStaleTab('simulation');
+      clearStaleTab('factors');
+      clearStaleTab('optimize');
+    }
+    wasFullLoadingRef.current = isFullLoading;
+  }, [isFullLoading, clearStaleTab]);
+
   const [sidebarExpanded, setSidebarExpanded] = useState(() => {
     const saved = localStorage.getItem('sidebar-expanded');
     return saved !== null ? JSON.parse(saved) : true;

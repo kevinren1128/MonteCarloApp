@@ -54,6 +54,48 @@ const CACHE_TTLS = {
   metrics: 24 * 60 * 60,    // 24 hours (unified metrics for Positions tab, refreshed by cron)
 };
 
+// Fallback exchange rates for ADRs and international stocks
+// Used when FMP forex endpoints fail or return empty data
+// Rates are approximate USD per 1 unit of foreign currency
+const FALLBACK_EXCHANGE_RATES = {
+  'TWD': 0.031,   // Taiwan Dollar (~32 TWD = 1 USD)
+  'EUR': 1.08,    // Euro
+  'GBP': 1.27,    // British Pound
+  'JPY': 0.0067,  // Japanese Yen (~150 JPY = 1 USD)
+  'KRW': 0.00074, // Korean Won
+  'CNY': 0.14,    // Chinese Yuan
+  'HKD': 0.128,   // Hong Kong Dollar
+  'CHF': 1.13,    // Swiss Franc
+  'AUD': 0.65,    // Australian Dollar
+  'CAD': 0.74,    // Canadian Dollar
+  'SEK': 0.095,   // Swedish Krona
+  'DKK': 0.145,   // Danish Krone
+  'NOK': 0.091,   // Norwegian Krone
+  'INR': 0.012,   // Indian Rupee
+  'BRL': 0.17,    // Brazilian Real
+  'SGD': 0.75,    // Singapore Dollar
+  'NZD': 0.60,    // New Zealand Dollar
+  'MXN': 0.058,   // Mexican Peso
+  'THB': 0.028,   // Thai Baht
+  'ZAR': 0.055,   // South African Rand
+};
+
+/**
+ * Get exchange rate for converting currency to USD
+ * @param {string} fromCurrency - Source currency code
+ * @returns {number} Exchange rate (multiply by this to get USD)
+ */
+function getExchangeRate(fromCurrency) {
+  if (!fromCurrency || fromCurrency === 'USD') return 1;
+  const rate = FALLBACK_EXCHANGE_RATES[fromCurrency];
+  if (rate) {
+    log.info('[FX] Using fallback exchange rate', { fromCurrency, rate });
+    return rate;
+  }
+  log.warn('[FX] No exchange rate for currency, defaulting to 1', { fromCurrency });
+  return 1;
+}
+
 // ============================================
 // LOGGING UTILITIES
 // ============================================
@@ -1298,20 +1340,39 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
     const latestIncome = sortedIncome[0];
     const reportingCurrency = latestIncome?.reportedCurrency || balanceSheet?.reportedCurrency || 'USD';
 
-    // Build income historical time series
+    // Get exchange rate for currency conversion (ADRs like TSM report in local currency)
+    const exchangeRate = getExchangeRate(reportingCurrency);
+    const needsConversion = reportingCurrency !== 'USD' && exchangeRate !== 1;
+
+    // Helper to convert monetary values to USD
+    const toUSD = (val) => {
+      if (val === null || val === undefined || isNaN(val)) return val;
+      if (!needsConversion) return val;
+      return val * exchangeRate;
+    };
+
+    if (needsConversion) {
+      log.info('[FMP Full] Currency conversion applied', {
+        ticker,
+        reportingCurrency,
+        exchangeRate,
+      });
+    }
+
+    // Build income historical time series (converted to USD)
     const incomeHistorical = sortedIncome.map(d => ({
       year: d.calendarYear || extractFiscalYear(d.date),
       date: d.date,
-      revenue: d.revenue,
-      grossProfit: d.grossProfit,
+      revenue: toUSD(d.revenue),
+      grossProfit: toUSD(d.grossProfit),
       grossMargin: d.grossProfitRatio || (d.revenue ? d.grossProfit / d.revenue : null),
-      operatingIncome: d.operatingIncome,
+      operatingIncome: toUSD(d.operatingIncome),
       operatingMargin: d.operatingIncomeRatio || (d.revenue ? d.operatingIncome / d.revenue : null),
-      ebitda: d.ebitda || (d.operatingIncome && d.depreciationAndAmortization
-        ? d.operatingIncome + d.depreciationAndAmortization : null),
-      netIncome: d.netIncome,
+      ebitda: toUSD(d.ebitda || (d.operatingIncome && d.depreciationAndAmortization
+        ? d.operatingIncome + d.depreciationAndAmortization : null)),
+      netIncome: toUSD(d.netIncome),
       netMargin: d.netIncomeRatio || (d.revenue ? d.netIncome / d.revenue : null),
-      eps: d.eps || d.epsdiluted,
+      eps: toUSD(d.eps || d.epsdiluted),
     }));
 
     // Find prior year data for growth calculations
@@ -1324,29 +1385,29 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
       priorYearData = sortedIncome[0];
     }
 
-    // Process balance sheet
-    const shortTermDebt = balanceSheet?.shortTermDebt || balanceSheet?.shortTermBorrowings || 0;
-    const longTermDebt = balanceSheet?.longTermDebt || 0;
-    const totalDebt = balanceSheet?.totalDebt || (shortTermDebt + longTermDebt);
-    const cash = balanceSheet?.cashAndCashEquivalents || balanceSheet?.cashAndShortTermInvestments || 0;
+    // Process balance sheet (convert from reporting currency to USD)
+    const shortTermDebt = toUSD(balanceSheet?.shortTermDebt || balanceSheet?.shortTermBorrowings || 0);
+    const longTermDebt = toUSD(balanceSheet?.longTermDebt || 0);
+    const totalDebt = toUSD(balanceSheet?.totalDebt) || (shortTermDebt + longTermDebt);
+    const cash = toUSD(balanceSheet?.cashAndCashEquivalents || balanceSheet?.cashAndShortTermInvestments || 0);
     const netDebt = totalDebt - cash;
 
-    // Calculate enterprise value
+    // Calculate enterprise value (marketCap is USD, balance sheet converted to USD)
     const calculatedEV = marketCap + netDebt;
-    const enterpriseValue = calculatedEV > 0 ? calculatedEV : (ev?.enterpriseValue || marketCap);
+    const enterpriseValue = calculatedEV > 0 ? calculatedEV : (toUSD(ev?.enterpriseValue) || marketCap);
 
-    // Process cash flow
+    // Process cash flow (convert from reporting currency to USD)
     const sortedCashFlow = [...cashFlow].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
     const latestCashFlow = sortedCashFlow[0];
     const cashFlowHistorical = sortedCashFlow.map(d => ({
       year: d.calendarYear || extractFiscalYear(d.date),
       date: d.date,
-      operatingCashFlow: d.operatingCashFlow || 0,
-      capitalExpenditure: d.capitalExpenditure,
-      freeCashFlow: d.freeCashFlow || ((d.operatingCashFlow || 0) - Math.abs(d.capitalExpenditure || 0)),
-      netIncome: d.netIncome || 0,
-      dividendsPaid: d.dividendsPaid,
-      stockRepurchases: d.commonStockRepurchased,
+      operatingCashFlow: toUSD(d.operatingCashFlow || 0),
+      capitalExpenditure: toUSD(d.capitalExpenditure),
+      freeCashFlow: toUSD(d.freeCashFlow || ((d.operatingCashFlow || 0) - Math.abs(d.capitalExpenditure || 0))),
+      netIncome: toUSD(d.netIncome || 0),
+      dividendsPaid: toUSD(d.dividendsPaid),
+      stockRepurchases: toUSD(d.commonStockRepurchased),
     }));
 
     // Process earnings calendar
@@ -1386,14 +1447,14 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
 
     const priceTargetConsensus = priceTargets?.targetConsensus || priceTargets?.priceTargetConsensus || null;
 
-    // Build FY estimates with margins
+    // Build FY estimates with margins (all monetary values converted to USD)
     const buildFyData = (obj) => {
       if (!obj) return null;
-      const revenue = getRevenue(obj);
-      const ebit = getEbit(obj);
-      const ebitda = getEbitda(obj);
-      const netIncome = getNetIncome(obj);
-      const grossProfit = getGrossProfit(obj);
+      const revenue = toUSD(getRevenue(obj));
+      const ebit = toUSD(getEbit(obj));
+      const ebitda = toUSD(getEbitda(obj));
+      const netIncome = toUSD(getNetIncome(obj));
+      const grossProfit = toUSD(getGrossProfit(obj));
       return {
         fiscalYear: extractFiscalYear(obj.date),
         date: obj.date,
@@ -1402,7 +1463,7 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         ebit,
         ebitda,
         netIncome,
-        eps: getEps(obj),
+        eps: toUSD(getEps(obj)),
         grossMargin: revenue && grossProfit ? grossProfit / revenue : null,
         ebitMargin: revenue && ebit ? ebit / revenue : null,
         ebitdaMargin: revenue && ebitda ? ebitda / revenue : null,
@@ -1497,14 +1558,14 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
       enterpriseValue,
       changesPercentage: quote?.changesPercentage || 0,
 
-      // FY estimates
+      // FY estimates (all values converted to USD)
       fy1,
       fy2,
       fy0: priorYearData ? {
         fiscalYear: priorYearData.calendarYear || extractFiscalYear(priorYearData.date),
-        revenue: priorYearData.revenue,
-        eps: priorYearData.eps || priorYearData.epsdiluted,
-        netIncome: priorYearData.netIncome,
+        revenue: toUSD(priorYearData.revenue),
+        eps: toUSD(priorYearData.eps || priorYearData.epsdiluted),
+        netIncome: toUSD(priorYearData.netIncome),
       } : null,
 
       // Forward valuation multiples
@@ -1577,16 +1638,16 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         receivablesTurnover: ratiosTtm?.receivablesTurnoverTTM,
       },
 
-      // Cash Flow
+      // Cash Flow (values converted to USD)
       cashFlow: {
-        freeCashFlow: latestCashFlow?.freeCashFlow,
-        operatingCashFlow: latestCashFlow?.operatingCashFlow,
-        capitalExpenditure: latestCashFlow?.capitalExpenditure,
-        freeCashFlowPerShare: ratiosTtm?.freeCashFlowPerShareTTM || ratiosAnnual[0]?.freeCashFlowPerShare,
-        operatingCashFlowPerShare: ratiosTtm?.operatingCashFlowPerShareTTM || ratiosAnnual[0]?.operatingCashFlowPerShare,
+        freeCashFlow: toUSD(latestCashFlow?.freeCashFlow),
+        operatingCashFlow: toUSD(latestCashFlow?.operatingCashFlow),
+        capitalExpenditure: toUSD(latestCashFlow?.capitalExpenditure),
+        freeCashFlowPerShare: toUSD(ratiosTtm?.freeCashFlowPerShareTTM || ratiosAnnual[0]?.freeCashFlowPerShare),
+        operatingCashFlowPerShare: toUSD(ratiosTtm?.operatingCashFlowPerShareTTM || ratiosAnnual[0]?.operatingCashFlowPerShare),
         priceToFCF: ratiosTtm?.priceToFreeCashFlowsRatioTTM || ratiosTtm?.priceToFreeCashFlowRatioTTM ||
           (marketCap && latestCashFlow?.freeCashFlow && latestCashFlow.freeCashFlow > 0
-            ? marketCap / latestCashFlow.freeCashFlow : null),
+            ? marketCap / toUSD(latestCashFlow.freeCashFlow) : null),
         fcfYield: ratiosTtm?.priceToFreeCashFlowsRatioTTM
           ? 1 / ratiosTtm.priceToFreeCashFlowsRatioTTM : null,
         fcfMargin: (latestCashFlow?.freeCashFlow && latestIncome?.revenue)
@@ -1599,16 +1660,16 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         historical: cashFlowHistorical,
       },
 
-      // Balance sheet data
+      // Balance sheet data (values converted to USD)
       balanceSheet: {
         totalDebt,
         shortTermDebt,
         longTermDebt,
         cashAndEquivalents: cash,
         netDebt,
-        totalAssets: balanceSheet?.totalAssets || 0,
-        totalLiabilities: balanceSheet?.totalLiabilities || 0,
-        totalEquity: balanceSheet?.totalStockholdersEquity || balanceSheet?.totalEquity || 0,
+        totalAssets: toUSD(balanceSheet?.totalAssets || 0),
+        totalLiabilities: toUSD(balanceSheet?.totalLiabilities || 0),
+        totalEquity: toUSD(balanceSheet?.totalStockholdersEquity || balanceSheet?.totalEquity || 0),
       },
 
       // Price targets
@@ -1654,6 +1715,8 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
       currency: {
         reporting: reportingCurrency,
         trading: 'USD',
+        converted: needsConversion,
+        exchangeRate: needsConversion ? exchangeRate : 1,
       },
 
       // Time series data
@@ -1679,6 +1742,9 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
       fy1Rev: fy1?.revenue,
       hasBalanceSheet: !!balanceSheet,
       premiumUnavailable: fullData.premiumUnavailable,
+      currencyConverted: needsConversion,
+      reportingCurrency: needsConversion ? reportingCurrency : undefined,
+      exchangeRate: needsConversion ? exchangeRate : undefined,
     });
 
     return fullData;

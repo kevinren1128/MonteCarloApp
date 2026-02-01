@@ -288,6 +288,8 @@ const Sidebar = memo(({
     tabIcon: {
       fontSize: '18px',
       flexShrink: 0,
+      width: '24px',
+      textAlign: 'center',
     },
     tabLabel: {
       fontSize: isMedium ? '11px' : '12px',
