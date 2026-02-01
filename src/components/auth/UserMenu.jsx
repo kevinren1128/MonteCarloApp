@@ -10,8 +10,9 @@ import { GoogleSignIn } from './GoogleSignIn';
  * @param {Object} props
  * @param {Object} props.syncState - Sync status object
  * @param {boolean} props.inlineSync - Show sync icon inline beside avatar (default: true)
+ * @param {boolean} props.isNarrow - Whether sidebar is in narrow/collapsed mode
  */
-export function UserMenu({ syncState = { status: 'idle' }, inlineSync = true }) {
+export function UserMenu({ syncState = { status: 'idle' }, inlineSync = true, isNarrow = false }) {
   const { state, logout } = useAuth();
   const { isAuthenticated, isAvailable, displayInfo, isLoading } = state;
   const [isOpen, setIsOpen] = useState(false);
@@ -64,7 +65,7 @@ export function UserMenu({ syncState = { status: 'idle' }, inlineSync = true }) 
   if (!isAuthenticated) {
     return (
       <div style={styles.container}>
-        <GoogleSignIn compact />
+        <GoogleSignIn compact iconOnly={isNarrow} />
       </div>
     );
   }

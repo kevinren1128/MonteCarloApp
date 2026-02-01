@@ -13,6 +13,7 @@ const AutosaveIndicator = memo(({
   lastSaved,
   error,
   style = {},
+  compact = false, // When true, show only icon (for narrow sidebar)
 }) => {
   // Format last saved time
   const formattedTime = useMemo(() => {
@@ -79,8 +80,8 @@ const AutosaveIndicator = memo(({
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '6px',
-        padding: '4px 10px',
+        gap: compact ? '0' : '6px',
+        padding: compact ? '4px 6px' : '4px 10px',
         borderRadius: '6px',
         background: `${statusDisplay.color}15`,
         border: `1px solid ${statusDisplay.color}30`,
@@ -89,7 +90,7 @@ const AutosaveIndicator = memo(({
         transition: 'all 0.2s ease',
         ...style,
       }}
-      title={error ? `Error: ${error.message}` : undefined}
+      title={compact ? statusDisplay.text : (error ? `Error: ${error.message}` : undefined)}
     >
       <span
         style={{
@@ -103,7 +104,7 @@ const AutosaveIndicator = memo(({
       >
         {statusDisplay.icon}
       </span>
-      <span style={{ fontWeight: 500 }}>{statusDisplay.text}</span>
+      {!compact && <span style={{ fontWeight: 500 }}>{statusDisplay.text}</span>}
 
       {/* CSS animation for saving state */}
       <style>

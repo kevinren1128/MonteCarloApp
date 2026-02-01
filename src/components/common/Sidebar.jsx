@@ -531,15 +531,15 @@ const Sidebar = memo(({
           </div>
         </div>
 
-        {/* Portfolio Value - Collapsed (narrow mode - icon only) */}
+        {/* Portfolio Value - Collapsed (narrow mode - compact value display) */}
         <div
           style={{
             display: 'flex',
             justifyContent: 'center',
-            padding: showLabels ? '0' : '8px 0',
+            padding: showLabels ? '0' : '6px 4px',
             opacity: showLabels ? 0 : 1,
             maxHeight: showLabels ? '0' : '50px',
-            overflow: 'hidden',
+            overflow: 'visible',
             transition: showLabels
               ? 'opacity 0.1s ease, max-height 0.25s ease, padding 0.25s ease'
               : 'opacity 0.15s ease 0.15s, max-height 0.25s ease, padding 0.25s ease',
@@ -548,19 +548,24 @@ const Sidebar = memo(({
         >
           <div
             style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '8px',
+              padding: '5px 6px',
+              borderRadius: '6px',
               background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.15) 0%, rgba(123, 47, 247, 0.1) 100%)',
               border: '1px solid rgba(0, 212, 255, 0.25)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: '14px',
-              position: 'relative',
+              fontSize: '9px',
+              fontWeight: '700',
+              color: '#00d4ff',
+              fontFamily: FONT_FAMILY,
+              whiteSpace: 'nowrap',
             }}
           >
-            💰
+            {portfolioValue >= 1e9 ? `$${(portfolioValue / 1e9).toFixed(1)}B` :
+             portfolioValue >= 1e6 ? `$${(portfolioValue / 1e6).toFixed(1)}M` :
+             portfolioValue >= 1e3 ? `$${Math.round(portfolioValue / 1e3)}K` :
+             portfolioValue > 0 ? `$${Math.round(portfolioValue)}` : '$0'}
           </div>
         </div>
       </div>
@@ -702,7 +707,7 @@ const Sidebar = memo(({
               <AutosaveIndicator status={autosaveStatus} compact={true} />
             </div>
           )}
-          {UserMenu && <UserMenu syncState={syncState} />}
+          {UserMenu && <UserMenu syncState={syncState} isNarrow={isNarrow} />}
           {/* Autosave indicator - right justified next to user avatar (only in wide mode) */}
           {AutosaveIndicator && isWide && (
             <div style={{ flexShrink: 0, marginLeft: 'auto' }}>

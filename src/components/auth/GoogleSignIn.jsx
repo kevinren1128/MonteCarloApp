@@ -4,8 +4,12 @@ import { useAuth } from '../../contexts/AuthContext';
 /**
  * Google Sign In Button
  * Renders a styled button that initiates Google OAuth flow
+ *
+ * @param {Object} props
+ * @param {boolean} props.compact - Use compact sizing (default: false)
+ * @param {boolean} props.iconOnly - Show only the Google icon, no text (for narrow sidebar)
  */
-export function GoogleSignIn({ compact = false }) {
+export function GoogleSignIn({ compact = false, iconOnly = false }) {
   const { login, state } = useAuth();
   const { isLoading, isAvailable } = state;
 
@@ -26,9 +30,9 @@ export function GoogleSignIn({ compact = false }) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: compact ? '6px' : '10px',
-      padding: compact ? '8px 14px' : '10px 20px',
-      borderRadius: '6px',
+      gap: iconOnly ? 0 : (compact ? '6px' : '10px'),
+      padding: iconOnly ? '8px' : (compact ? '8px 14px' : '10px 20px'),
+      borderRadius: iconOnly ? '50%' : '6px',
       background: '#fff',
       border: '1px solid #dadce0',
       cursor: isLoading ? 'wait' : 'pointer',
@@ -39,6 +43,8 @@ export function GoogleSignIn({ compact = false }) {
       transition: 'all 0.15s ease',
       boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
       opacity: isLoading ? 0.7 : 1,
+      minWidth: iconOnly ? '36px' : 'auto',
+      minHeight: iconOnly ? '36px' : 'auto',
     },
     buttonHover: {
       background: '#f8f9fa',
@@ -87,6 +93,8 @@ export function GoogleSignIn({ compact = false }) {
       }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      title={iconOnly ? 'Sign in with Google' : undefined}
+      aria-label={iconOnly ? 'Sign in with Google' : undefined}
     >
       {isLoading ? (
         <div style={styles.spinner} />
@@ -110,7 +118,9 @@ export function GoogleSignIn({ compact = false }) {
           />
         </svg>
       )}
-      <span>{isLoading ? 'Signing in...' : (compact ? 'Sign in' : 'Sign in with Google')}</span>
+      {!iconOnly && (
+        <span>{isLoading ? 'Signing in...' : (compact ? 'Sign in' : 'Sign in with Google')}</span>
+      )}
     </button>
   );
 }

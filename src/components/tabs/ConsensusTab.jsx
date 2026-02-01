@@ -1329,8 +1329,8 @@ const ConsensusTab = memo(({ positions, styles }) => {
           {viewTab === 'profitability' && renderProfitabilityContent()}
           {viewTab === 'health' && renderHealthContent()}
 
-          {/* Common Info Row - responsive grid with key data (always show) */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '14px', fontSize: '10px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px' }}>
+          {/* Common Info Row - responsive flex layout with key data (always show) */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', fontSize: '10px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px' }}>
             {/* Price Targets */}
             <div style={{ minWidth: '120px' }}>
               <div style={{ fontWeight: '600', color: COLORS.cyan, marginBottom: '6px', fontSize: '11px' }}>Price Targets</div>

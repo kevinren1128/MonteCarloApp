@@ -69,7 +69,7 @@ export function useDocumentTitle({ activeTab, isLoading, portfolioValue }) {
       return;
     }
 
-    const { emoji, label } = tabConfig;
+    const { label } = tabConfig;
 
     // Format portfolio value if available and on positions tab
     let valueSuffix = '';
@@ -80,7 +80,7 @@ export function useDocumentTitle({ activeTab, isLoading, portfolioValue }) {
       }
     }
 
-    document.title = `${emoji} ${label}${valueSuffix} | ${BASE_TITLE}`;
+    document.title = `${label}${valueSuffix} | factorsim`;
   }, [activeTab, isLoading, portfolioValue]);
 }
 
