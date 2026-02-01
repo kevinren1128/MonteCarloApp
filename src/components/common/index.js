@@ -48,6 +48,7 @@ export { default as RecoveryDialog } from './RecoveryDialog';
 
 // Status indicators
 export { default as AutosaveIndicator } from './AutosaveIndicator';
+export { default as StaleBanner } from './StaleBanner';
 
 // Layout components
 export { default as Sidebar } from './Sidebar';

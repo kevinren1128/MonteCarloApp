@@ -32,6 +32,14 @@ export { useOptimization } from './useOptimization';
 // Portfolio sync hook (server persistence)
 export { usePortfolioSync } from './usePortfolioSync';
 
+// Staleness tracking hook
+export {
+  useStaleness,
+  initialInputVersions,
+  initialTabComputedVersions,
+  DEPENDENCIES,
+} from './useStaleness';
+
 /**
  * HOOK EXTRACTION GUIDE
  * =====================

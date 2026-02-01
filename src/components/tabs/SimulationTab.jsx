@@ -1,5 +1,6 @@
 import React, { useMemo, memo, useCallback, useState } from 'react';
 import { InteractiveHistogram } from '../charts';
+import { StaleBanner } from '../common';
 
 // Monospace font stack - matches appStyles.js container font
 const FONT_FAMILY = "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace";
@@ -45,11 +46,17 @@ const SimulationTab = memo(({
   
   // Callbacks
   runSimulation,
-  
+
+  // Staleness tracking
+  stalenessStatus,
+  stalenessReason,
+  canRun,
+  onNavigateTab,
+
   // Common components passed as props
   BlurInput,
   InfoTooltip,
-  
+
   // Styles
   styles,
 }) => {
@@ -265,6 +272,20 @@ const SimulationTab = memo(({
 
   return (
     <div style={{ fontFamily: FONT_FAMILY }}>
+      {/* Staleness Banner */}
+      {stalenessStatus && stalenessStatus !== 'fresh' && (
+        <StaleBanner
+          status={stalenessStatus}
+          reason={stalenessReason}
+          tabName="Simulation"
+          onRerun={canRun ? runSimulation : undefined}
+          rerunLabel="Run Simulation"
+          blockedTab={stalenessStatus === 'blocked' ? 'correlation' : undefined}
+          onNavigate={onNavigateTab}
+          styles={styles}
+        />
+      )}
+
       {/* Monte Carlo Settings - Premium Design */}
       <div style={{
         background: 'linear-gradient(135deg, rgba(22, 27, 44, 0.98) 0%, rgba(17, 24, 39, 0.98) 100%)',

@@ -572,6 +572,8 @@ const Sidebar = memo(({
           const hasNewContent = status?.hasNewContent;
           const isProcessing = status?.isProcessing;
           const isStale = status?.isStale;
+          const tabStatusType = status?.status; // 'fresh' | 'stale' | 'blocked' | 'never'
+          const isBlocked = tabStatusType === 'blocked';
           const isActive = activeTab === tab.id;
 
           return (
@@ -582,7 +584,7 @@ const Sidebar = memo(({
                 position: 'relative',
               }}
               onClick={() => onTabChange(tab.id)}
-              title={isNarrow ? `${tab.label} (${tab.shortcut})${hasNewContent ? ' • New' : isProcessing ? ' • Processing' : isStale ? ' • Stale' : ''}` : undefined}
+              title={isNarrow ? `${tab.label} (${tab.shortcut})${hasNewContent ? ' • New' : isProcessing ? ' • Processing' : isBlocked ? ' • Blocked' : isStale ? ' • Stale' : ''}` : undefined}
               onMouseOver={(e) => {
                 if (!isActive) {
                   e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
@@ -639,8 +641,24 @@ const Sidebar = memo(({
                   title="Processing..."
                 />
               )}
+              {/* Yellow dot for blocked - upstream needs update first */}
+              {!isActive && isBlocked && !isProcessing && !hasNewContent && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '6px',
+                    right: '6px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #f1c40f, #f39c12)',
+                    boxShadow: '0 0 6px rgba(241, 196, 15, 0.5)',
+                  }}
+                  title="Blocked - update upstream tabs first"
+                />
+              )}
               {/* Red dot for stale data - portfolio has changed since last calculation */}
-              {!isActive && isStale && !isProcessing && !hasNewContent && (
+              {!isActive && isStale && !isBlocked && !isProcessing && !hasNewContent && (
                 <span
                   style={{
                     position: 'absolute',
@@ -652,7 +670,7 @@ const Sidebar = memo(({
                     background: 'linear-gradient(135deg, #e74c3c, #c0392b)',
                     boxShadow: '0 0 6px rgba(231, 76, 60, 0.5)',
                   }}
-                  title="Data is stale - portfolio has changed"
+                  title="Data is stale - inputs have changed"
                 />
               )}
             </button>

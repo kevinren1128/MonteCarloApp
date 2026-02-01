@@ -11,7 +11,7 @@ import {
 } from './components/common';
 
 // Hooks for autosave, undo/redo, simulation, and sync
-import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation, usePortfolioSync } from './hooks';
+import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation, usePortfolioSync, useStaleness, initialInputVersions, initialTabComputedVersions, DEPENDENCIES } from './hooks';
 
 // Auth components
 import { UserMenu } from './components/auth';
@@ -1128,63 +1128,112 @@ function MonteCarloSimulator() {
   }, []);
 
   // ============================================
-  // STALE DATA TRACKING
+  // STALE DATA TRACKING (Version-based)
   // ============================================
-  // Track which tabs have stale data (positions changed since last calculation)
-  const [staleTabs, setStaleTabs] = useState({
-    distributions: false,
-    correlation: false,
-    simulation: false,
-    factors: false,
-    optimize: false,
-  });
+  // Tracks input versions and when each tab was last computed
+  // Dependency Flow:
+  // - Positions change → Distributions, Correlation stale → Simulation, Factors, Optimize stale
+  // - Distributions change → Simulation, Optimize stale (NOT Correlation)
+  // - Correlation change → Simulation, Optimize stale (NOT Factors)
 
-  // Track positions version to detect changes
-  const positionsVersionRef = useRef(0);
+  const [inputVersions, setInputVersions] = useState(initialInputVersions);
+  const [tabComputedVersions, setTabComputedVersions] = useState(initialTabComputedVersions);
+
+  // Use the staleness hook to derive status
+  const { statuses: tabStatuses, getStatus, getReason, isStale, canRun } = useStaleness(inputVersions, tabComputedVersions);
+
+  // Refs to track previous values for change detection
   const lastPositionsKeyRef = useRef('');
+  const lastDistributionsKeyRef = useRef('');
+  const lastCorrelationKeyRef = useRef('');
 
-  // Mark tabs as stale when positions change (add/remove/modify ticker or quantity)
+  // Bump positions version when positions change (ticker or quantity)
   useEffect(() => {
-    // Create a key based on position tickers and quantities (not prices - those don't affect calculations)
     const positionsKey = JSON.stringify(
       positions
-        .filter(p => p.ticker) // Only include positions with tickers
+        .filter(p => p.ticker)
         .map(p => ({ ticker: p.ticker, quantity: p.quantity }))
         .sort((a, b) => a.ticker.localeCompare(b.ticker))
     );
 
-    // Skip on first render
     if (lastPositionsKeyRef.current === '') {
       lastPositionsKeyRef.current = positionsKey;
       return;
     }
 
-    // If positions haven't changed, do nothing
-    if (positionsKey === lastPositionsKeyRef.current) {
+    if (positionsKey !== lastPositionsKeyRef.current) {
+      console.log('[Stale] Positions changed, bumping version');
+      lastPositionsKeyRef.current = positionsKey;
+      setInputVersions(prev => ({ ...prev, positions: prev.positions + 1 }));
+    }
+  }, [positions]);
+
+  // Bump distributions version when distribution params change (p5/p25/p50/p75/p95)
+  useEffect(() => {
+    const distributionsKey = JSON.stringify(
+      positions
+        .filter(p => p.ticker)
+        .map(p => ({ ticker: p.ticker, p5: p.p5, p25: p.p25, p50: p.p50, p75: p.p75, p95: p.p95 }))
+        .sort((a, b) => a.ticker.localeCompare(b.ticker))
+    );
+
+    if (lastDistributionsKeyRef.current === '') {
+      lastDistributionsKeyRef.current = distributionsKey;
       return;
     }
 
-    // Positions changed! Mark relevant tabs as stale
-    console.log('[Stale] Portfolio changed, marking tabs as stale');
-    lastPositionsKeyRef.current = positionsKey;
-    positionsVersionRef.current += 1;
-
-    setStaleTabs({
-      distributions: true,
-      correlation: true,
-      simulation: true,
-      factors: true,
-      optimize: true,
-    });
-
-    // Note: Running simulations will complete but their results will be marked stale
-    // TODO: Add cancelSimulation to useSimulation hook for immediate cancellation
+    if (distributionsKey !== lastDistributionsKeyRef.current) {
+      console.log('[Stale] Distributions changed, bumping version');
+      lastDistributionsKeyRef.current = distributionsKey;
+      setInputVersions(prev => ({ ...prev, distributions: prev.distributions + 1 }));
+    }
   }, [positions]);
 
-  // Helper to clear stale status for a tab
+  // Bump correlation version when editedCorrelation changes
+  useEffect(() => {
+    if (!editedCorrelation) return;
+
+    const correlationKey = JSON.stringify(editedCorrelation);
+
+    if (lastCorrelationKeyRef.current === '') {
+      lastCorrelationKeyRef.current = correlationKey;
+      return;
+    }
+
+    if (correlationKey !== lastCorrelationKeyRef.current) {
+      console.log('[Stale] Correlation changed, bumping version');
+      lastCorrelationKeyRef.current = correlationKey;
+      setInputVersions(prev => ({ ...prev, correlation: prev.correlation + 1 }));
+    }
+  }, [editedCorrelation]);
+
+  // Mark a tab as computed with current input versions
+  const markTabComputed = useCallback((tabId) => {
+    const deps = DEPENDENCIES[tabId] || [];
+    const newVersions = {};
+    for (const dep of deps) {
+      newVersions[dep] = inputVersions[dep];
+    }
+    setTabComputedVersions(prev => ({
+      ...prev,
+      [tabId]: newVersions,
+    }));
+    console.log(`[Stale] Marked ${tabId} as computed with versions:`, newVersions);
+  }, [inputVersions]);
+
+  // Legacy compatibility: staleTabs object for existing code
+  const staleTabs = useMemo(() => ({
+    distributions: isStale('distributions'),
+    correlation: isStale('correlation'),
+    simulation: isStale('simulation'),
+    factors: isStale('factors'),
+    optimize: isStale('optimize'),
+  }), [isStale]);
+
+  // Legacy compatibility: clearStaleTab (now marks tab as computed)
   const clearStaleTab = useCallback((tabId) => {
-    setStaleTabs(prev => ({ ...prev, [tabId]: false }));
-  }, []);
+    markTabComputed(tabId);
+  }, [markTabComputed]);
 
   // Track previous isSimulating state to detect completion
   const wasSimulatingRef = useRef(false);
@@ -7121,41 +7170,49 @@ function MonteCarloSimulator() {
             hasNewContent: tabContentUpdatedAt.positions > tabVisitedAt.positions,
             isProcessing: isFetchingUnified || isFetchingBetas,
             isStale: false, // Positions tab is never stale
+            status: 'fresh',
           },
           consensus: {
             hasNewContent: tabContentUpdatedAt.consensus > tabVisitedAt.consensus,
             isProcessing: false, // Consensus loads with full load, tracked separately
             isStale: false, // Consensus is always fresh from API
+            status: 'fresh',
           },
           distributions: {
             hasNewContent: tabContentUpdatedAt.distributions > tabVisitedAt.distributions,
             isProcessing: isFetchingYearReturns,
             isStale: staleTabs.distributions,
+            status: getStatus('distributions'),
           },
           correlation: {
             hasNewContent: tabContentUpdatedAt.correlation > tabVisitedAt.correlation,
             isProcessing: isFetchingData || isAnalyzingLag,
             isStale: staleTabs.correlation,
+            status: getStatus('correlation'),
           },
           factors: {
             hasNewContent: tabContentUpdatedAt.factors > tabVisitedAt.factors,
             isProcessing: isFetchingFactors,
             isStale: staleTabs.factors,
+            status: getStatus('factors'),
           },
           simulation: {
             hasNewContent: tabContentUpdatedAt.simulation > tabVisitedAt.simulation,
             isProcessing: isSimulating,
             isStale: staleTabs.simulation,
+            status: getStatus('simulation'),
           },
           optimize: {
             hasNewContent: tabContentUpdatedAt.optimize > tabVisitedAt.optimize,
             isProcessing: isOptimizing,
             isStale: staleTabs.optimize,
+            status: getStatus('optimize'),
           },
           export: {
             hasNewContent: false,
             isProcessing: false,
             isStale: false,
+            status: 'fresh',
           },
         }}
         UserMenu={UserMenu}
@@ -7504,6 +7561,11 @@ function MonteCarloSimulator() {
               return await saveCorrelationGroupsToServer(tickerGroups, 'sector', 'user');
             }}
 
+            // Staleness tracking
+            stalenessStatus={getStatus('correlation')}
+            stalenessReason={getReason('correlation')}
+            onNavigateTab={setActiveTab}
+
             // Styles
             styles={styles}
           />
@@ -7542,11 +7604,17 @@ function MonteCarloSimulator() {
             
             // Callbacks
             runSimulation={runSimulation}
-            
+
+            // Staleness tracking
+            stalenessStatus={getStatus('simulation')}
+            stalenessReason={getReason('simulation')}
+            canRun={canRun('simulation')}
+            onNavigateTab={setActiveTab}
+
             // Common components
             BlurInput={BlurInput}
             InfoTooltip={InfoTooltip}
-            
+
             // Styles
             styles={styles}
           />
@@ -7569,6 +7637,10 @@ function MonteCarloSimulator() {
             thematicSwapProgress={thematicSwapProgress}
             isRunningThematicSwaps={isRunningThematicSwaps}
             runThematicSwapAnalysis={runThematicSwapAnalysis}
+            // Staleness tracking
+            stalenessStatus={getStatus('factors')}
+            stalenessReason={getReason('factors')}
+            onNavigateTab={setActiveTab}
             styles={styles}
           />
         )}
@@ -7591,6 +7663,11 @@ function MonteCarloSimulator() {
             isOptimizing={isOptimizing}
             runPortfolioOptimization={runPortfolioOptimization}
             setOptimizationResults={setOptimizationResults}
+            // Staleness tracking
+            stalenessStatus={getStatus('optimize')}
+            stalenessReason={getReason('optimize')}
+            canRun={canRun('optimize')}
+            onNavigateTab={setActiveTab}
             styles={styles}
           />
         )}
