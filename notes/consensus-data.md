@@ -152,21 +152,28 @@ SELECT ticker, failure_count, next_retry_at FROM tracked_tickers WHERE failure_c
 
 ## Gotchas
 
-1. **Materialized View RLS**: Views bypass RLS, but this is OK since consensus data is shared and read-only for users.
+1. **Materialized View RLS**: Views bypass RLS. While this is fine for shared read-only data, the frontend Supabase client still needs explicit GRANT permissions to read the view.
 
-2. **Statement-Level Trigger**: Uses AFTER STATEMENT (not row-level) to handle delete+insert atomic saves.
+2. **GRANT SELECT Required**: After creating `consensus_latest` view, you MUST run:
+   ```sql
+   GRANT SELECT ON consensus_latest TO anon, authenticated;
+   ```
+   Without this, the anon/authenticated roles get empty results (no error, just `[]`).
 
-3. **Supabase JS in Workers**: Direct REST API used instead of `@supabase/supabase-js` (Node.js deps don't work in Workers).
+3. **Statement-Level Trigger**: Uses AFTER STATEMENT (not row-level) to handle delete+insert atomic saves.
 
-4. **Data Shape Transformation**: JSONB stores full FMP response; frontend transforms to match existing ConsensusTab format.
+4. **Supabase JS in Workers**: Direct REST API used instead of `@supabase/supabase-js` (Node.js deps don't work in Workers).
 
-5. **Stale Threshold**: Data older than 48 hours triggers live FMP fallback (if user has API key).
+5. **Data Shape Transformation**: JSONB stores full FMP response; frontend transforms to match existing ConsensusTab format.
+
+6. **Stale Threshold**: Data older than 48 hours triggers live FMP fallback (if user has API key).
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `supabase/migrations/20260131300000_shared_consensus_data.sql` | Database schema |
+| `supabase/migrations/20260201000000_fix_consensus_view_permissions.sql` | GRANT SELECT on materialized view |
 | `worker/index.js` (scheduled handler) | Cron job implementation |
 | `src/services/consensusService.js` | Frontend database reads |
 | `src/components/tabs/ConsensusTab.jsx` | UI integration |
