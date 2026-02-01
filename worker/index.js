@@ -1213,25 +1213,28 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
   };
 
   try {
-    // Fetch all 13 endpoints in parallel (same as frontend fmpService.js)
+    // Fetch all 15 endpoints in parallel (same as frontend fmpService.js)
     const [
       estimatesRaw, quoteRaw, evRaw, metricsRaw, incomeRaw,
       priceTargetsRaw, ratingsRaw, growthRaw, earningsRaw,
-      ratiosTtmRaw, ratiosAnnualRaw, cashFlowRaw, balanceSheetRaw
+      ratiosTtmRaw, ratiosAnnualRaw, cashFlowRaw, balanceSheetRaw,
+      financialScoresRaw, dividendsRaw
     ] = await Promise.all([
       fetchFMPStableEndpoint(`/analyst-estimates?symbol=${ticker}&period=annual&limit=5`, apiKey, requestId),
       fetchFMPStableEndpoint(`/quote?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/enterprise-values?symbol=${ticker}&limit=1`, apiKey, requestId),
       fetchFMPStableEndpoint(`/key-metrics?symbol=${ticker}&period=ttm`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/income-statement?symbol=${ticker}&period=annual&limit=10`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/income-statement?symbol=${ticker}&period=annual&limit=20`, apiKey, requestId),
       fetchFMPStableEndpoint(`/price-target-consensus?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/grades-consensus?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/financial-growth?symbol=${ticker}&limit=3`, apiKey, requestId),
       fetchFMPStableEndpoint(`/earnings?symbol=${ticker}&limit=20`, apiKey, requestId),
       fetchFMPStableEndpoint(`/ratios-ttm?symbol=${ticker}`, apiKey, requestId),
       fetchFMPStableEndpoint(`/ratios?symbol=${ticker}&period=annual&limit=3`, apiKey, requestId),
-      fetchFMPStableEndpoint(`/cash-flow-statement?symbol=${ticker}&period=annual&limit=10`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/cash-flow-statement?symbol=${ticker}&period=annual&limit=20`, apiKey, requestId),
       fetchFMPStableEndpoint(`/balance-sheet-statement?symbol=${ticker}&period=annual&limit=1`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/financial-scores?symbol=${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/dividends?symbol=${ticker}&limit=8`, apiKey, requestId),
     ]);
 
     const duration = Date.now() - startTime;
@@ -1249,6 +1252,24 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
     const cashFlow = Array.isArray(cashFlowRaw) ? cashFlowRaw : [];
     const balanceSheet = Array.isArray(balanceSheetRaw) ? balanceSheetRaw[0] : balanceSheetRaw;
     const earnings = Array.isArray(earningsRaw) ? earningsRaw : [];
+    const financialScores = Array.isArray(financialScoresRaw) ? financialScoresRaw[0] : financialScoresRaw;
+    const dividendsData = Array.isArray(dividendsRaw) ? dividendsRaw : [];
+
+    // Log warnings for premium endpoints that may require paid access
+    const premiumEndpointsMissing = [];
+    if (!financialScoresRaw) {
+      premiumEndpointsMissing.push('financial-scores');
+    }
+    if (!dividendsRaw) {
+      premiumEndpointsMissing.push('dividends');
+    }
+    if (premiumEndpointsMissing.length > 0) {
+      log.warn('[FMP Full] Premium endpoints unavailable (may require paid FMP access)', {
+        ticker,
+        requestId,
+        missingEndpoints: premiumEndpointsMissing,
+      });
+    }
 
     if (!quote && (!estimatesRaw || estimatesRaw.length === 0)) {
       log.warn('[FMP Full] No data found', { ticker, duration });
@@ -1393,6 +1414,80 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
     const fy2 = buildFyData(fy2Data);
     const fy3 = buildFyData(fy3Data);
 
+    // Process dividend data
+    let dividendsProcessed = null;
+    if (dividendsData && dividendsData.length > 0) {
+      // Sort by date descending (most recent first)
+      const sortedDividends = [...dividendsData].sort((a, b) =>
+        (b.date || b.recordDate || '').localeCompare(a.date || a.recordDate || '')
+      );
+
+      const latestDiv = sortedDividends[0];
+      const latestAmount = latestDiv?.dividend || latestDiv?.adjDividend || 0;
+
+      // Calculate annualized dividend
+      // If quarterly (most common for US stocks), multiply by 4
+      // Otherwise sum last 4 dividends within 365 days
+      const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const recentDividends = sortedDividends.filter(d =>
+        (d.date || d.recordDate) >= oneYearAgo
+      );
+
+      let annualized = 0;
+      if (recentDividends.length >= 4) {
+        // Sum last 4 dividends (typical quarterly pattern)
+        annualized = recentDividends.slice(0, 4).reduce((sum, d) =>
+          sum + (d.dividend || d.adjDividend || 0), 0
+        );
+      } else if (recentDividends.length > 0) {
+        // Annualize based on actual payments in last year
+        const totalRecent = recentDividends.reduce((sum, d) =>
+          sum + (d.dividend || d.adjDividend || 0), 0
+        );
+        // If only 1-3 payments, assume quarterly and multiply
+        annualized = recentDividends.length === 1 ? totalRecent * 4 :
+                     recentDividends.length === 2 ? totalRecent * 2 :
+                     totalRecent * (4 / 3);
+      }
+
+      // Calculate yield (annualized dividend / current price)
+      const dividendYield = (price && annualized) ? annualized / price : null;
+
+      // Calculate payout ratio: (annual dividend * shares) / net income
+      // We need shares outstanding - get from quote or calculate from marketCap/price
+      const sharesOutstanding = quote?.sharesOutstanding ||
+        (marketCap && price ? marketCap / price : null);
+
+      let payoutRatio = null;
+      const latestNetIncome = latestIncome?.netIncome;
+      if (sharesOutstanding && annualized && latestNetIncome && latestNetIncome > 0) {
+        const totalDividendsPaid = annualized * sharesOutstanding;
+        payoutRatio = totalDividendsPaid / latestNetIncome;
+      }
+      // Fallback: use dividendsPaid from cash flow if available
+      if (payoutRatio === null && latestCashFlow?.dividendsPaid && latestNetIncome && latestNetIncome > 0) {
+        // dividendsPaid is typically negative in cash flow statements
+        payoutRatio = Math.abs(latestCashFlow.dividendsPaid) / latestNetIncome;
+      }
+
+      dividendsProcessed = {
+        latestAmount,
+        annualized,
+        yield: dividendYield,
+        payoutRatio,
+        exDate: latestDiv?.date || null,
+        payDate: latestDiv?.paymentDate || null,
+      };
+    }
+
+    // Calculate 3Y average ROE from historical ratios
+    const roeValues = ratiosAnnual.slice(0, 3)
+      .map(r => r.returnOnEquity)
+      .filter(v => v != null && !isNaN(v));
+    const avgROE = roeValues.length > 0
+      ? roeValues.reduce((a, b) => a + b, 0) / roeValues.length
+      : null;
+
     // Build the full data object (matches frontend structure exactly)
     const fullData = {
       ticker,
@@ -1442,6 +1537,7 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
       // Profitability & Returns (TTM)
       profitability: {
         roe: metrics?.returnOnEquity || ratiosTtm?.returnOnEquityTTM,
+        avgROE,
         roa: metrics?.returnOnAssets || ratiosTtm?.returnOnAssetsTTM,
         roic: metrics?.returnOnInvestedCapital || ratiosTtm?.returnOnCapitalEmployedTTM,
         freeCashFlowYield: metrics?.freeCashFlowYield || (ratiosTtm?.priceToFreeCashFlowRatioTTM
@@ -1450,10 +1546,35 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
 
       // Balance Sheet Health
       health: {
-        debtToEquity: metrics?.debtToEquity || ratiosTtm?.debtEquityRatioTTM,
-        currentRatio: metrics?.currentRatio || ratiosTtm?.currentRatioTTM,
-        quickRatio: metrics?.quickRatio || ratiosTtm?.quickRatioTTM,
-        interestCoverage: ratiosTtm?.interestCoverageTTM,
+        // D/E ratio: try TTM variants from key-metrics and ratios-ttm endpoints
+        debtToEquity: metrics?.debtToEquityTTM || metrics?.debtToEquity ||
+                      ratiosTtm?.debtEquityRatioTTM || ratiosTtm?.debtToEquityRatioTTM,
+        currentRatio: metrics?.currentRatioTTM || metrics?.currentRatio || ratiosTtm?.currentRatioTTM,
+        quickRatio: metrics?.quickRatioTTM || metrics?.quickRatio || ratiosTtm?.quickRatioTTM,
+        // Interest coverage: try variants from ratios-ttm and key-metrics
+        interestCoverage: ratiosTtm?.interestCoverageTTM || ratiosTtm?.interestCoverageRatioTTM ||
+                          metrics?.interestCoverageTTM || metrics?.interestCoverage,
+        // Asset Turnover = Revenue / Total Assets (from ratios-ttm or calculated)
+        assetTurnover: ratiosTtm?.assetTurnoverTTM || ratiosTtm?.totalAssetTurnoverTTM ||
+                       (latestIncome?.revenue && balanceSheet?.totalAssets
+                        ? latestIncome.revenue / balanceSheet.totalAssets : null),
+        // Inventory Turnover = COGS / Inventory (from ratios-ttm or calculated; may be null for tech companies)
+        inventoryTurnover: ratiosTtm?.inventoryTurnoverTTM ||
+                           (latestIncome?.costOfRevenue && balanceSheet?.inventory
+                            ? latestIncome.costOfRevenue / balanceSheet.inventory : null),
+        altmanZScore: financialScores?.altmanZScore ?? null,
+        piotroskiScore: financialScores?.piotroskiScore ?? null,
+      },
+
+      // Efficiency (turnover ratios) - for frontend compatibility
+      efficiency: {
+        assetTurnover: ratiosTtm?.assetTurnoverTTM || ratiosTtm?.totalAssetTurnoverTTM ||
+                       (latestIncome?.revenue && balanceSheet?.totalAssets
+                        ? latestIncome.revenue / balanceSheet.totalAssets : null),
+        inventoryTurnover: ratiosTtm?.inventoryTurnoverTTM ||
+                           (latestIncome?.costOfRevenue && balanceSheet?.inventory
+                            ? latestIncome.costOfRevenue / balanceSheet.inventory : null),
+        receivablesTurnover: ratiosTtm?.receivablesTurnoverTTM,
       },
 
       // Cash Flow
@@ -1463,13 +1584,18 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         capitalExpenditure: latestCashFlow?.capitalExpenditure,
         freeCashFlowPerShare: ratiosTtm?.freeCashFlowPerShareTTM || ratiosAnnual[0]?.freeCashFlowPerShare,
         operatingCashFlowPerShare: ratiosTtm?.operatingCashFlowPerShareTTM || ratiosAnnual[0]?.operatingCashFlowPerShare,
-        priceToFCF: ratiosTtm?.priceToFreeCashFlowsRatioTTM,
+        priceToFCF: ratiosTtm?.priceToFreeCashFlowsRatioTTM || ratiosTtm?.priceToFreeCashFlowRatioTTM ||
+          (marketCap && latestCashFlow?.freeCashFlow && latestCashFlow.freeCashFlow > 0
+            ? marketCap / latestCashFlow.freeCashFlow : null),
         fcfYield: ratiosTtm?.priceToFreeCashFlowsRatioTTM
           ? 1 / ratiosTtm.priceToFreeCashFlowsRatioTTM : null,
         fcfMargin: (latestCashFlow?.freeCashFlow && latestIncome?.revenue)
           ? latestCashFlow.freeCashFlow / latestIncome.revenue : null,
         fcfConversion: (latestCashFlow?.freeCashFlow && latestIncome?.netIncome && latestIncome.netIncome !== 0)
           ? latestCashFlow.freeCashFlow / latestIncome.netIncome : null,
+        // Dividend fields (duplicated here for ConsensusTab compatibility)
+        dividendYield: dividendsProcessed?.yield ?? null,
+        payoutRatio: dividendsProcessed?.payoutRatio ?? null,
         historical: cashFlowHistorical,
       },
 
@@ -1537,12 +1663,23 @@ async function fetchFullFMPConsensus(ticker, apiKey) {
         fy3,
       },
 
+      // Dividends
+      dividends: dividendsProcessed,
+
       // Metadata
       fetchedAt: new Date().toISOString(),
       partial: !fy1 || !ratings || !priceTargets,
+      // Premium endpoints may require paid FMP access (free tier may not include these)
+      premiumUnavailable: !financialScoresRaw || !dividendsRaw,
     };
 
-    log.info('[FMP Full] Fetched complete data', { ticker, duration, fy1Rev: fy1?.revenue, hasBalanceSheet: !!balanceSheet });
+    log.info('[FMP Full] Fetched complete data', {
+      ticker,
+      duration,
+      fy1Rev: fy1?.revenue,
+      hasBalanceSheet: !!balanceSheet,
+      premiumUnavailable: fullData.premiumUnavailable,
+    });
 
     return fullData;
 
