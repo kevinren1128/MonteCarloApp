@@ -791,6 +791,24 @@ const generateChiSquared = (df) => {
   return Math.max(0.01, sum);
 };
 
+// Validate correlation matrix is a proper 2D array with correct structure
+const isValidCorrelationMatrix = (matrix, expectedSize = null) => {
+  // Must be an array
+  if (!Array.isArray(matrix)) return false;
+  const n = matrix.length;
+  if (n < 2) return false;
+  // If expected size provided, must match
+  if (expectedSize !== null && n !== expectedSize) return false;
+  // Each row must be an array of the same length
+  for (let i = 0; i < n; i++) {
+    if (!Array.isArray(matrix[i])) return false;
+    if (matrix[i].length !== n) return false;
+    // Diagonal must be 1 (or very close)
+    if (typeof matrix[i][i] !== 'number' || Math.abs(matrix[i][i] - 1) > 0.01) return false;
+  }
+  return true;
+};
+
 // Cholesky decomposition
 const choleskyDecomposition = (matrix) => {
   const n = matrix.length;
@@ -5674,8 +5692,35 @@ function MonteCarloSimulator() {
   // Run full portfolio optimization analysis
   const runPortfolioOptimization = useCallback(async (correlationMatrixParam = null) => {
     const tickers = positions.map(p => p.ticker?.toUpperCase()).filter(t => t);
+    const n = positions.length;
+
     // Use passed-in correlation or fall back to state (for manual calls)
-    const correlationToUse = correlationMatrixParam || editedCorrelation;
+    let correlationToUse = correlationMatrixParam || editedCorrelation;
+
+    // Validate the correlation matrix structure
+    if (!isValidCorrelationMatrix(correlationToUse, n)) {
+      console.warn('Invalid correlation matrix detected:', {
+        isArray: Array.isArray(correlationToUse),
+        length: correlationToUse?.length,
+        expectedSize: n,
+        type: typeof correlationToUse,
+      });
+
+      // Try to use correlationMatrix (the computed one) as fallback
+      if (isValidCorrelationMatrix(correlationMatrix, n)) {
+        console.log('Using correlationMatrix as fallback');
+        correlationToUse = correlationMatrix;
+      } else {
+        showToast({
+          type: 'warning',
+          title: 'Invalid Correlation Matrix',
+          message: 'Please run "Load All" or compute correlation first. The correlation matrix is missing or corrupted.',
+          duration: 5000,
+        });
+        return;
+      }
+    }
+
     if (tickers.length < 2 || !correlationToUse || correlationToUse.length < 2) {
       showToast({
         type: 'warning',
@@ -5688,9 +5733,8 @@ function MonteCarloSimulator() {
     
     setIsOptimizing(true);
     setOptimizationProgress({ current: 0, total: 100, phase: 'Computing risk decomposition...' });
-    
+
     const startTime = performance.now();
-    const n = positions.length;
     const rf = riskFreeRate;
     
     // Get distribution parameters
@@ -5887,7 +5931,7 @@ function MonteCarloSimulator() {
       const weightsArr = new Float64Array(testAdjustedWeights); // Already adjusted
       const skewArr = new Float64Array(skewArray);
       const dfArr = new Float64Array(dfArray);
-      
+
       const validDfs = dfArray.filter(d => d > 0 && d < 100);
       const avgDf = validDfs.length > 0 ? Math.min(...validDfs) : 10;
       
@@ -5948,7 +5992,7 @@ function MonteCarloSimulator() {
         const portfolioReturn = Math.max(-1, Math.min(10, positionsReturn + constantCashReturn));
         terminalReturns[path] = isFinite(portfolioReturn) ? portfolioReturn : 0;
       }
-      
+
       // Compute statistics
       const validReturns = Array.from(terminalReturns).filter(v => isFinite(v));
       const sorted = [...validReturns].sort((a, b) => a - b);
