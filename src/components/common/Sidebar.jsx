@@ -884,8 +884,8 @@ const Sidebar = memo(({
                     Loading {marketDataProgress.message}...
                   </div>
                 )}
-                {/* Show other phase details - only in wide mode */}
-                {loadProgress.detail && (!marketDataProgress?.total || marketDataProgress.total === 0) && isWide && (
+                {/* Show phase details - only in wide mode */}
+                {loadProgress.detail && isWide && (
                   <div style={{
                     fontSize: '8px',
                     color: '#888',
