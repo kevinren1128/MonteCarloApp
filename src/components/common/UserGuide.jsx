@@ -7,7 +7,7 @@
 
 import React, { useEffect, useState } from 'react';
 
-const UserGuide = ({ isOpen, onClose }) => {
+const UserGuide = ({ isOpen, onClose, isFirstTime = false }) => {
   const [activeSection, setActiveSection] = useState('overview');
   
   // Close on escape
@@ -34,6 +34,7 @@ const UserGuide = ({ isOpen, onClose }) => {
     { id: 'correlation', label: 'Correlation', icon: '🔗' },
     { id: 'simulation', label: 'Simulation', icon: '🎲' },
     { id: 'factors', label: 'Factors', icon: '🧬' },
+    { id: 'consensus', label: 'Consensus', icon: '📢' },
     { id: 'optimize', label: 'Optimize', icon: '⚡' },
     { id: 'export', label: 'Export', icon: '📄' },
     { id: 'tips', label: 'Tips', icon: '💡' },
@@ -44,16 +45,26 @@ const UserGuide = ({ isOpen, onClose }) => {
       case 'overview':
         return (
           <div style={styles.sectionContent}>
+            {isFirstTime && (
+              <div style={styles.welcomeBox}>
+                <h2 style={styles.welcomeTitle}>Welcome to FactorSim!</h2>
+                <p style={styles.welcomeText}>
+                  This is your first time here. Let us show you around so you can get the most
+                  out of your portfolio analysis.
+                </p>
+              </div>
+            )}
+
             <h3 style={styles.sectionTitle}>What is Monte Carlo Simulation?</h3>
             <p style={styles.paragraph}>
-              Monte Carlo simulation uses random sampling to model the probability of different outcomes 
-              in a process that cannot easily be predicted. For portfolios, it simulates thousands of 
+              Monte Carlo simulation uses random sampling to model the probability of different outcomes
+              in a process that cannot easily be predicted. For portfolios, it simulates thousands of
               possible market scenarios to estimate the range of potential returns.
             </p>
-            
+
             <h3 style={styles.sectionTitle}>What This App Does</h3>
             <p style={styles.paragraph}>
-              This application takes your portfolio holdings and runs sophisticated Monte Carlo simulations 
+              This application takes your portfolio holdings and runs sophisticated Monte Carlo simulations
               to help you understand:
             </p>
             <ul style={styles.list}>
@@ -64,15 +75,32 @@ const UserGuide = ({ isOpen, onClose }) => {
               <li>Factor exposures (market, size, value, momentum)</li>
               <li>Optimization opportunities to improve risk-adjusted returns</li>
             </ul>
-            
+
             <div style={styles.highlightBox}>
               <div style={styles.highlightIcon}>💡</div>
               <div>
-                <strong>Key Insight:</strong> The simulation uses historical data to estimate how your 
-                positions move together (correlation) and their individual volatility profiles, then 
+                <strong>Key Insight:</strong> The simulation uses historical data to estimate how your
+                positions move together (correlation) and their individual volatility profiles, then
                 projects thousands of possible future scenarios.
               </div>
             </div>
+
+            {isFirstTime && (
+              <div style={styles.getStartedBox}>
+                <button
+                  onClick={() => setActiveSection('workflow')}
+                  style={styles.getStartedButton}
+                >
+                  See the Recommended Workflow
+                </button>
+                <button
+                  onClick={onClose}
+                  style={styles.skipButton}
+                >
+                  I'll explore on my own
+                </button>
+              </div>
+            )}
           </div>
         );
         
@@ -87,13 +115,14 @@ const UserGuide = ({ isOpen, onClose }) => {
             <div style={styles.workflowSteps}>
               {[
                 { step: 1, title: 'Enter Positions', desc: 'Add your holdings with ticker, quantity, and price. Negative quantities = short positions.', tab: 'Positions' },
-                { step: 2, title: 'Load Market Data', desc: 'Click "Load Betas" to fetch historical data, beta, YTD/1Y returns for each position.', tab: 'Positions' },
-                { step: 3, title: 'Estimate Distributions', desc: 'Generate expected return (μ) and volatility (σ) for each position from historical data.', tab: 'Distributions' },
+                { step: 2, title: 'Load Market Data', desc: 'Click "Load All" to fetch historical data, beta, and YTD/1Y returns for each position.', tab: 'Positions' },
+                { step: 3, title: 'Estimate Distributions', desc: 'Generate expected return (P5-P95) for each position from historical data or your own views.', tab: 'Distributions' },
                 { step: 4, title: 'Build Correlation Matrix', desc: 'Estimate how your positions move together. Use Ledoit-Wolf shrinkage for stability.', tab: 'Correlation' },
                 { step: 5, title: 'Run Simulation', desc: 'Execute Monte Carlo with 10,000-50,000 paths to see return distributions and risk metrics.', tab: 'Simulation' },
                 { step: 6, title: 'Analyze Factors', desc: 'Understand your exposure to market factors and thematic concentrations.', tab: 'Factors' },
-                { step: 7, title: 'Optimize (Optional)', desc: 'Find position swaps that could improve your Sharpe ratio.', tab: 'Optimize' },
-                { step: 8, title: 'Export Report', desc: 'Generate a comprehensive PDF report of your analysis.', tab: 'Export' },
+                { step: 7, title: 'Check Consensus (Optional)', desc: 'Compare your assumptions to Wall Street analyst estimates.', tab: 'Consensus' },
+                { step: 8, title: 'Optimize (Optional)', desc: 'Find position swaps that could improve your Sharpe ratio.', tab: 'Optimize' },
+                { step: 9, title: 'Export Report', desc: 'Generate a comprehensive PDF report of your analysis.', tab: 'Export' },
               ].map(item => (
                 <div key={item.step} style={styles.workflowStep}>
                   <div style={styles.stepNumber}>{item.step}</div>
@@ -277,7 +306,40 @@ const UserGuide = ({ isOpen, onClose }) => {
             </p>
           </div>
         );
-        
+
+      case 'consensus':
+        return (
+          <div style={styles.sectionContent}>
+            <h3 style={styles.sectionTitle}>Consensus Tab</h3>
+            <p style={styles.paragraph}>
+              View Wall Street analyst estimates and compare your assumptions to market consensus.
+            </p>
+
+            <h4 style={styles.subTitle}>Analyst Estimates</h4>
+            <ul style={styles.list}>
+              <li><strong>EPS Estimates:</strong> Expected earnings per share for coming quarters/years</li>
+              <li><strong>Revenue Estimates:</strong> Projected sales figures</li>
+              <li><strong>Price Targets:</strong> Analyst price target high/low/average</li>
+              <li><strong>Recommendation:</strong> Buy/Hold/Sell consensus rating</li>
+            </ul>
+
+            <h4 style={styles.subTitle}>Why This Matters</h4>
+            <p style={styles.paragraph}>
+              Comparing your distribution assumptions (P5-P95) against analyst estimates helps you
+              understand if your views differ from consensus. If you expect -20% while analysts
+              expect +30%, either you have unique insight or should revisit your assumptions.
+            </p>
+
+            <div style={styles.highlightBox}>
+              <div style={styles.highlightIcon}>📢</div>
+              <div>
+                <strong>Note:</strong> Consensus data requires an FMP API key. Sign up at
+                financialmodelingprep.com for free to enable this feature.
+              </div>
+            </div>
+          </div>
+        );
+
       case 'optimize':
         return (
           <div style={styles.sectionContent}>
@@ -720,6 +782,66 @@ const styles = {
     fontSize: '10px',
     border: '1px solid rgba(255, 255, 255, 0.15)',
     fontFamily: 'monospace',
+  },
+
+  // First-time user welcome styles
+  welcomeBox: {
+    background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.15) 0%, rgba(139, 92, 246, 0.15) 100%)',
+    border: '1px solid rgba(0, 212, 255, 0.3)',
+    borderRadius: '12px',
+    padding: '20px',
+    marginBottom: '24px',
+    textAlign: 'center',
+  },
+
+  welcomeTitle: {
+    margin: '0 0 8px 0',
+    fontSize: '20px',
+    fontWeight: 700,
+    background: 'linear-gradient(135deg, #00d4ff 0%, #8b5cf6 100%)',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    backgroundClip: 'text',
+  },
+
+  welcomeText: {
+    margin: 0,
+    fontSize: '14px',
+    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 1.5,
+  },
+
+  getStartedBox: {
+    display: 'flex',
+    gap: '12px',
+    justifyContent: 'center',
+    marginTop: '24px',
+    paddingTop: '20px',
+    borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+  },
+
+  getStartedButton: {
+    background: 'linear-gradient(135deg, #00d4ff 0%, #8b5cf6 100%)',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '12px 24px',
+    fontSize: '14px',
+    fontWeight: 600,
+    color: '#fff',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  },
+
+  skipButton: {
+    background: 'rgba(255, 255, 255, 0.1)',
+    border: '1px solid rgba(255, 255, 255, 0.2)',
+    borderRadius: '8px',
+    padding: '12px 24px',
+    fontSize: '14px',
+    fontWeight: 500,
+    color: 'rgba(255, 255, 255, 0.7)',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
   },
 };
 

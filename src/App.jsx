@@ -11,7 +11,7 @@ import {
 } from './components/common';
 
 // Hooks for autosave, undo/redo, simulation, and sync
-import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation, usePortfolioSync, useStaleness, initialInputVersions, initialTabComputedVersions, DEPENDENCIES, useDocumentTitle } from './hooks';
+import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation, usePortfolioSync, useStaleness, initialInputVersions, initialTabComputedVersions, DEPENDENCIES, useDocumentTitle, useFirstTimeUser } from './hooks';
 
 // Auth components
 import { UserMenu } from './components/auth';
@@ -971,6 +971,13 @@ function MonteCarloSimulator() {
   // Track if we've loaded from server on login
   const hasLoadedFromServerRef = React.useRef(false);
 
+  // First-time user onboarding hook
+  const {
+    shouldShowOnboarding,
+    completeOnboarding,
+    triggerOnboardingCheck,
+  } = useFirstTimeUser();
+
   // Load saved data on mount
   const savedData = useMemo(() => loadFromStorage(), []);
   
@@ -1524,6 +1531,18 @@ function MonteCarloSimulator() {
   // User guide modal
   const [showUserGuide, setShowUserGuide] = useState(false);
 
+  // Auto-open user guide for first-time users
+  useEffect(() => {
+    if (shouldShowOnboarding) {
+      console.log('[App] First-time user detected, opening user guide');
+      // Small delay to ensure UI is ready
+      const timer = setTimeout(() => {
+        setShowUserGuide(true);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [shouldShowOnboarding]);
+
   // Add positions modal
   const [showAddPositionsModal, setShowAddPositionsModal] = useState(false);
 
@@ -1742,10 +1761,14 @@ function MonteCarloSimulator() {
           setShouldRefreshAfterLogin(true);
         }, 500);
       }
+
+      // Check if this is a first-time user (no positions in cloud)
+      // This will trigger the onboarding modal for new users
+      triggerOnboardingCheck(data);
     };
 
     loadServerData();
-  }, [authState.isAuthenticated, loadFromServer, showToast]);
+  }, [authState.isAuthenticated, loadFromServer, showToast, triggerOnboardingCheck]);
 
   // Track previous auth state to detect sign-out
   const wasAuthenticatedRef = useRef(authState.isAuthenticated);
@@ -7947,9 +7970,17 @@ function MonteCarloSimulator() {
       />
       
       {/* User Guide Modal */}
-      <UserGuide 
-        isOpen={showUserGuide} 
-        onClose={() => setShowUserGuide(false)} 
+      <UserGuide
+        isOpen={showUserGuide}
+        isFirstTime={shouldShowOnboarding}
+        onClose={() => {
+          setShowUserGuide(false);
+          // Mark onboarding as complete when user closes the guide
+          // This ensures first-time users don't see it again
+          if (shouldShowOnboarding) {
+            completeOnboarding();
+          }
+        }}
       />
       
       {/* Add Positions Modal */}

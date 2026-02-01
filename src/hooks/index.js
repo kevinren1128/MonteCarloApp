@@ -43,6 +43,9 @@ export {
 // Document title hook
 export { useDocumentTitle } from './useDocumentTitle';
 
+// First-time user onboarding hook
+export { useFirstTimeUser } from './useFirstTimeUser';
+
 /**
  * HOOK EXTRACTION GUIDE
  * =====================

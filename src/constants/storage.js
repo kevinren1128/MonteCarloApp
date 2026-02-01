@@ -14,12 +14,15 @@
 export const STORAGE_KEYS = {
   /** User's portfolio (positions, cash, settings) */
   PORTFOLIO: 'monte-carlo-portfolio-v1',
-  
+
   /** Unified market data cache (prices, returns, metadata) */
   MARKET_DATA: 'monte-carlo-unified-market-data-v6',
-  
+
   /** User preferences and settings */
   SETTINGS: 'monte-carlo-settings-v1',
+
+  /** Tracks whether user has completed first-time onboarding */
+  ONBOARDING_COMPLETED: 'factorsim-onboarding-completed',
 };
 
 /**
