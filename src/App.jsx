@@ -5483,8 +5483,13 @@ function MonteCarloSimulator() {
         thematicMatch,
         hasData: true,
       });
+
+      // Yield to UI thread every 3 positions to prevent freezing
+      if (positionAnalysis.length % 3 === 0) {
+        await new Promise(r => setTimeout(r, 0));
+      }
     }
-    
+
     // Aggregate portfolio-level factor exposures
     const portfolioFactorBetas = {
       MKT: 0, SMB: 0, HML: 0, MOM: 0,
