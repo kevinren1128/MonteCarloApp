@@ -160,56 +160,61 @@ const fetchExchangeRate = async (fromCurrency, apiKey) => {
 
   const cacheKey = `${fromCurrency}_USD`;
   if (exchangeRateCache[cacheKey]) {
+    console.log(`[FMP] Exchange rate ${fromCurrency} -> USD (cached):`, exchangeRateCache[cacheKey]);
     return exchangeRateCache[cacheKey];
   }
 
   const pair = `${fromCurrency}USD`;
+  console.log(`[FMP] Fetching exchange rate for ${fromCurrency} -> USD...`);
 
   // Try FMP forex endpoint
   try {
     const data = await fetchFMP(`/fx/${pair}`, apiKey);
-    if (data && data[0]?.price) {
+    if (data && Array.isArray(data) && data.length > 0 && data[0]?.price) {
       const rate = data[0].price;
       exchangeRateCache[cacheKey] = rate;
-      console.log(`[FMP] Exchange rate ${fromCurrency} -> USD:`, rate);
+      console.log(`[FMP] Exchange rate ${fromCurrency} -> USD (fx endpoint):`, rate);
       return rate;
     }
+    console.log(`[FMP] FX endpoint returned no data for ${pair}:`, data);
   } catch (err) {
-    // Continue to next fallback
+    console.log(`[FMP] FX endpoint failed for ${pair}:`, err.message);
   }
 
   // Try quote endpoint for forex pair
   try {
     const quoteData = await fetchFMP(`/quote/${pair}`, apiKey);
-    if (quoteData && quoteData[0]?.price) {
+    if (quoteData && Array.isArray(quoteData) && quoteData.length > 0 && quoteData[0]?.price) {
       const rate = quoteData[0].price;
       exchangeRateCache[cacheKey] = rate;
-      console.log(`[FMP] Exchange rate (quote) ${fromCurrency} -> USD:`, rate);
+      console.log(`[FMP] Exchange rate ${fromCurrency} -> USD (quote endpoint):`, rate);
       return rate;
     }
+    console.log(`[FMP] Quote endpoint returned no data for ${pair}:`, quoteData);
   } catch (err) {
-    // Continue to next fallback
+    console.log(`[FMP] Quote endpoint failed for ${pair}:`, err.message);
   }
 
-  // Try v3 forex endpoint
+  // Try v3 forex endpoint (legacy)
   try {
     const v3Url = `https://financialmodelingprep.com/api/v3/fx/${pair}?apikey=${apiKey}`;
     const v3Response = await fetch(v3Url);
     if (v3Response.ok) {
       const v3Data = await v3Response.json();
-      if (v3Data && v3Data[0]?.bid) {
+      if (v3Data && Array.isArray(v3Data) && v3Data.length > 0 && v3Data[0]?.bid) {
         const rate = v3Data[0].bid;
         exchangeRateCache[cacheKey] = rate;
-        console.log(`[FMP] Exchange rate (v3) ${fromCurrency} -> USD:`, rate);
+        console.log(`[FMP] Exchange rate ${fromCurrency} -> USD (v3 endpoint):`, rate);
         return rate;
       }
     }
+    console.log(`[FMP] V3 FX endpoint returned no data for ${pair}`);
   } catch (err) {
-    // Continue to fallback
+    console.log(`[FMP] V3 FX endpoint failed for ${pair}:`, err.message);
   }
 
   // All API attempts failed, use hardcoded fallback rate
-  console.warn(`[FMP] Could not fetch exchange rate for ${fromCurrency} from API, using fallback`);
+  console.warn(`[FMP] All FX endpoints failed for ${fromCurrency}, using hardcoded fallback rate`);
   const fallbackRate = getFallbackRate(fromCurrency);
   exchangeRateCache[cacheKey] = fallbackRate;
   return fallbackRate;
@@ -1077,23 +1082,44 @@ export const fetchConsensusData = async (ticker, apiKey) => {
   // For ADRs like TSM: quote is in USD (trading currency) but financial statements are in TWD (reporting currency)
   // The analyst estimates are also in the REPORTING currency, not the trading currency
   // Try multiple sources for the reporting currency to ensure we detect it correctly
-  const reportingCurrency = income?.reportedCurrency
-    || balanceSheet?.reportedCurrency
-    || cashFlowStmt?.reportedCurrency
+  const detectedCurrencies = {
+    income: income?.reportedCurrency || null,
+    balanceSheet: balanceSheet?.reportedCurrency || null,
+    cashFlow: cashFlowStmt?.reportedCurrency || null,
+  };
+
+  const reportingCurrency = detectedCurrencies.income
+    || detectedCurrencies.balanceSheet
+    || detectedCurrencies.cashFlow
     || 'USD';
+
   const tradingCurrency = quote?.exchange?.includes('NYSE') || quote?.exchange?.includes('NASDAQ') ? 'USD' : 'USD';
 
-  console.log(`[FMP] ${ticker}: Detected currencies - income: ${income?.reportedCurrency}, balanceSheet: ${balanceSheet?.reportedCurrency}, final: ${reportingCurrency}`);
+  // Log all detected currencies for debugging
+  console.log(`[FMP] ${ticker}: Currency detection - income: ${detectedCurrencies.income}, balanceSheet: ${detectedCurrencies.balanceSheet}, cashFlow: ${detectedCurrencies.cashFlow} => final: ${reportingCurrency}`);
 
   // Get exchange rate for converting reporting currency values to USD
   let exchangeRate = 1;
   if (reportingCurrency !== 'USD') {
     exchangeRate = await fetchExchangeRate(reportingCurrency, apiKey);
     console.log(`[FMP] ${ticker}: Exchange rate ${reportingCurrency} -> USD: ${exchangeRate}`);
+
+    // Validate the exchange rate is reasonable (between 0.0001 and 10000)
+    if (!exchangeRate || exchangeRate < 0.0001 || exchangeRate > 10000) {
+      console.warn(`[FMP] ${ticker}: Invalid exchange rate ${exchangeRate}, using fallback for ${reportingCurrency}`);
+      exchangeRate = getFallbackRate(reportingCurrency);
+    }
   }
 
+  // Log conversion info for debugging currency issues
+  const needsConversion = reportingCurrency !== 'USD';
+  console.log(`[FMP] ${ticker}: Conversion needed: ${needsConversion}, rate: ${exchangeRate}`);
+
   // Helper to convert monetary values from reporting currency to USD
-  const toUSD = (val) => convertToUSD(val, exchangeRate);
+  const toUSD = (val) => {
+    const result = convertToUSD(val, exchangeRate);
+    return result;
+  };
 
   // Debug: Log raw balance sheet values before conversion
   console.log(`[FMP] ${ticker}: Raw balance sheet - totalDebt: ${balanceSheet?.totalDebt}, cash: ${balanceSheet?.cashAndCashEquivalents}`);
@@ -1183,9 +1209,10 @@ export const fetchConsensusData = async (ticker, apiKey) => {
   const fy0NetIncome = toUSD(priorYearData?.netIncome) || 0;
   const fy0FiscalYear = priorYearData?.year || (fy1FiscalYear ? fy1FiscalYear - 1 : null);
 
-  console.log('[FMP] FY0/FY1 for', ticker, '- FY0 year:', fy0FiscalYear, 'rev:', fy0Revenue, '- FY1 year:', fy1FiscalYear, 'rev:', fy1Revenue, '- currency:', reportingCurrency);
+  console.log('[FMP] FY0/FY1 for', ticker, '- FY0 year:', fy0FiscalYear, 'rev:', fy0Revenue, '- FY1 year:', fy1FiscalYear, 'rev:', fy1Revenue, '- currency:', reportingCurrency, '- fxRate:', exchangeRate);
 
-  return {
+  // Build result object
+  const result = {
     ticker,
     name: quote?.name || ticker,
     price,
@@ -1423,6 +1450,88 @@ export const fetchConsensusData = async (ticker, apiKey) => {
       } : null,
     },
   };
+
+  // SANITY CHECK: Detect if currency conversion may have failed
+  // If EV or revenue is unreasonably high (>$10T for a single company), conversion likely failed
+  const sanityThreshold = 10e12; // $10 trillion
+  if (result.enterpriseValue > sanityThreshold || result.fy1?.revenue > sanityThreshold) {
+    console.error(`[FMP] ${ticker}: SANITY CHECK FAILED - Values unreasonably high! EV: $${(result.enterpriseValue/1e12).toFixed(1)}T, FY1 Rev: $${(result.fy1?.revenue/1e12).toFixed(1)}T`);
+    console.error(`[FMP] ${ticker}: Currency info - reporting: ${reportingCurrency}, exchangeRate: ${exchangeRate}, needsConversion: ${needsConversion}`);
+    console.error(`[FMP] ${ticker}: Detected currencies:`, detectedCurrencies);
+
+    // Force retry with fallback rate if we have a non-USD currency
+    if (reportingCurrency !== 'USD') {
+      const fallbackRate = getFallbackRate(reportingCurrency);
+      console.warn(`[FMP] ${ticker}: Applying fallback conversion rate ${fallbackRate} for ${reportingCurrency}`);
+
+      // Re-convert critical values
+      const reConvert = (val) => val && typeof val === 'number' ? val * fallbackRate : val;
+
+      result.enterpriseValue = marketCap + (reConvert(balanceSheet?.totalDebt || 0) - reConvert(balanceSheet?.cashAndCashEquivalents || 0));
+      result.fy1.revenue = reConvert(estimates?.fy1?.revenue) || 0;
+      result.fy1.eps = reConvert(estimates?.fy1?.eps) || 0;
+      result.fy1.ebit = reConvert(estimates?.fy1?.ebit);
+      result.fy1.ebitda = reConvert(estimates?.fy1?.ebitda);
+      result.fy0.revenue = reConvert(priorYearData?.revenue) || 0;
+      result.fy0.eps = reConvert(priorYearData?.eps) || 0;
+      result.balanceSheet.totalDebt = reConvert(balanceSheet?.totalDebt) || 0;
+      result.balanceSheet.cashAndEquivalents = reConvert(balanceSheet?.cashAndCashEquivalents) || 0;
+      result.balanceSheet.netDebt = result.balanceSheet.totalDebt - result.balanceSheet.cashAndEquivalents;
+      result.cashFlow.freeCashFlow = reConvert(cashFlowStmt?.freeCashFlow);
+      result.cashFlow.operatingCashFlow = reConvert(cashFlowStmt?.operatingCashFlow);
+
+      // Recalculate multiples with corrected values
+      result.multiples.fy1PE = result.fy1.eps ? result.price / result.fy1.eps : null;
+      result.multiples.forwardPE = result.multiples.fy1PE;
+      result.multiples.fy1EvToEbitda = result.fy1.ebitda ? result.enterpriseValue / result.fy1.ebitda : null;
+      result.multiples.evToEbitda = result.multiples.fy1EvToEbitda;
+      result.multiples.fy1EvToEbit = result.fy1.ebit ? result.enterpriseValue / result.fy1.ebit : null;
+      result.multiples.evToEbit = result.multiples.fy1EvToEbit;
+      result.multiples.fy1PriceToSales = result.fy1.revenue ? result.marketCap / result.fy1.revenue : null;
+      result.multiples.priceToSales = result.multiples.fy1PriceToSales;
+
+      result.currency.exchangeRate = fallbackRate;
+      result.currency.fallbackApplied = true;
+
+      // Also re-convert time series data (values weren't converted because exchangeRate was 1)
+      // So we just need to multiply by fallbackRate
+      if (result.timeSeries?.historical) {
+        result.timeSeries.historical = result.timeSeries.historical.map(h => ({
+          ...h,
+          revenue: reConvert(h.revenue),
+          grossProfit: reConvert(h.grossProfit),
+          operatingIncome: reConvert(h.operatingIncome),
+          ebitda: reConvert(h.ebitda),
+          netIncome: reConvert(h.netIncome),
+          eps: reConvert(h.eps),
+        }));
+      }
+      if (result.timeSeries?.forward) {
+        result.timeSeries.forward = result.timeSeries.forward.map(f => ({
+          ...f,
+          revenue: reConvert(f.revenue),
+          grossProfit: reConvert(f.grossProfit),
+          ebit: reConvert(f.ebit),
+          ebitda: reConvert(f.ebitda),
+          netIncome: reConvert(f.netIncome),
+          eps: reConvert(f.eps),
+        }));
+      }
+      if (result.cashFlow?.historical) {
+        result.cashFlow.historical = result.cashFlow.historical.map(cf => ({
+          ...cf,
+          freeCashFlow: reConvert(cf.freeCashFlow),
+          operatingCashFlow: reConvert(cf.operatingCashFlow),
+          capitalExpenditure: reConvert(cf.capitalExpenditure),
+          netIncome: reConvert(cf.netIncome),
+        }));
+      }
+
+      console.log(`[FMP] ${ticker}: After fallback - EV: $${(result.enterpriseValue/1e9).toFixed(1)}B, FY1 Rev: $${(result.fy1?.revenue/1e9).toFixed(1)}B`);
+    }
+  }
+
+  return result;
 };
 
 /**
