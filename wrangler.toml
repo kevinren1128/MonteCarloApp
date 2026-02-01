@@ -32,6 +32,14 @@ local_protocol = "http"
 # [build]
 # command = "npm run build"
 
-# Deployment triggers
-# [triggers]
-# crons = []  # No scheduled triggers for this worker
+# Deployment triggers - Daily consensus data update
+[triggers]
+crons = ["0 6 * * *"]  # 6:00 AM UTC daily
+
+# Supabase secrets for cron job (set via wrangler secret put)
+# Run these commands to set secrets:
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+#
+# SUPABASE_URL: https://uoyvihrdllwslljminid.supabase.co
+# SUPABASE_SERVICE_ROLE_KEY: Get from Supabase dashboard -> Settings -> API -> service_role key

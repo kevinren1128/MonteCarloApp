@@ -14,6 +14,11 @@ import {
   validateApiKey,
   fetchMissingConsensusData,
 } from '../../services/fmpService';
+import {
+  getSharedConsensusData,
+  getMissingOrStaleTickers,
+  getSharedDataSummary,
+} from '../../services/consensusService';
 
 // Storage keys for localStorage persistence
 const CONSENSUS_STORAGE_KEY = 'monte-carlo-consensus-data';
@@ -234,14 +239,39 @@ const ConsensusTab = memo(({ positions, styles }) => {
       setApiKeyInput(savedKey);
     }
 
-    // Load persisted consensus data from localStorage
-    const { data, timestamp } = loadConsensusData();
-    if (data && Object.keys(data).length > 0) {
-      setConsensusData(data);
+    // Load persisted consensus data from localStorage first (instant)
+    const { data: localData, timestamp } = loadConsensusData();
+    if (localData && Object.keys(localData).length > 0) {
+      setConsensusData(localData);
       setLastUpdated(timestamp);
-      console.log('[Consensus] Loaded persisted data for', Object.keys(data).length, 'tickers');
+      console.log('[Consensus] Loaded persisted data for', Object.keys(localData).length, 'tickers');
     }
-  }, []);
+
+    // Then try to load from shared database (async, may have fresher data)
+    const loadSharedData = async () => {
+      try {
+        // Get tickers from positions prop (need to wait for it to be available)
+        const tickerList = positions?.map(p => p.ticker?.toUpperCase()).filter(Boolean) || [];
+        if (tickerList.length === 0) return;
+
+        const sharedData = await getSharedConsensusData(tickerList);
+        if (Object.keys(sharedData).length > 0) {
+          console.log('[Consensus] Loaded shared DB data for', Object.keys(sharedData).length, 'tickers');
+          // Merge with local data (shared data takes precedence for freshness)
+          setConsensusData(prev => {
+            const merged = { ...prev, ...sharedData };
+            // Save merged data to localStorage
+            saveConsensusData(merged);
+            return merged;
+          });
+        }
+      } catch (err) {
+        console.warn('[Consensus] Failed to load shared data:', err.message);
+      }
+    };
+
+    loadSharedData();
+  }, [positions]);
 
   // Tickers
   const tickers = [...new Set(positions.map(p => p.ticker?.toUpperCase()).filter(Boolean))];
@@ -298,26 +328,60 @@ const ConsensusTab = memo(({ positions, styles }) => {
     return issues;
   }, []);
 
-  // Fetch data (refresh all)
+  // Fetch data - tries shared database first, then falls back to live FMP API
   const handleFetchData = useCallback(async () => {
-    if (!apiKey || !tickers.length) return;
+    if (!tickers.length) return;
     setIsLoading(true);
     setError(null);
-    setLoadingProgress({ current: 0, total: tickers.length, ticker: '' });
+    setLoadingProgress({ current: 0, total: tickers.length, ticker: 'Loading from shared database...' });
+
     try {
-      const data = await batchFetchConsensusData(tickers, apiKey, (current, total, ticker) =>
-        setLoadingProgress({ current, total, ticker })
-      );
+      // 1. Try shared database first (no API key needed)
+      let sharedData = {};
+      try {
+        sharedData = await getSharedConsensusData(tickers);
+        const summary = getSharedDataSummary(tickers, sharedData);
+        console.log('[Consensus] Shared DB summary:', summary);
+      } catch (dbError) {
+        console.warn('[Consensus] Shared DB unavailable, falling back to live API:', dbError.message);
+      }
+
+      // 2. Identify tickers that need live FMP fetch (missing or stale)
+      const missingTickers = getMissingOrStaleTickers(tickers, sharedData);
+
+      // 3. Fetch missing from live FMP (requires API key)
+      let liveData = {};
+      if (missingTickers.length > 0 && apiKey) {
+        console.log(`[Consensus] Fetching ${missingTickers.length} tickers from live FMP API`);
+        setLoadingProgress({ current: Object.keys(sharedData).length, total: tickers.length, ticker: 'Fetching missing from FMP...' });
+
+        liveData = await batchFetchConsensusData(missingTickers, apiKey, (current, total, ticker) =>
+          setLoadingProgress({
+            current: Object.keys(sharedData).length + current,
+            total: tickers.length,
+            ticker
+          })
+        );
+      } else if (missingTickers.length > 0 && !apiKey) {
+        console.log(`[Consensus] ${missingTickers.length} tickers missing but no API key for live fetch`);
+      }
+
+      // 4. Merge results (live data overrides shared for freshness)
+      const mergedData = { ...sharedData, ...liveData };
 
       // Validate data before saving
-      validateData(data);
+      validateData(mergedData);
 
-      setConsensusData(data);
+      setConsensusData(mergedData);
       setLastUpdated(new Date());
 
       // Persist to localStorage
-      saveConsensusData(data);
-    } catch (err) { setError(err.message); }
+      saveConsensusData(mergedData);
+
+    } catch (err) {
+      console.error('[Consensus] Fetch error:', err);
+      setError(err.message);
+    }
     setIsLoading(false);
   }, [apiKey, tickers, validateData]);
 

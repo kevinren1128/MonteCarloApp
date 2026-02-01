@@ -39,6 +39,16 @@ Dashboard: https://supabase.com/dashboard/project/uoyvihrdllwslljminid
 | `target_allocations` | Rebalancing targets | portfolio_id, symbol, target_weight, min_weight, max_weight |
 | `dividend_history` | Dividend tracking | portfolio_id, symbol, ex_date, amount, shares_held, reinvested |
 
+**Shared Consensus Data (populated by cron job):**
+
+| Table | Purpose | Key Fields |
+|-------|---------|------------|
+| `tracked_tickers` | All unique tickers across portfolios | ticker, ref_count, active, failure_count, next_retry_at |
+| `consensus_snapshots` | Daily FMP consensus data | ticker, as_of_date, data (JSONB), status |
+| `consensus_latest` | Materialized view for fast reads | ticker → most recent snapshot |
+
+See [notes/consensus-data.md](./consensus-data.md) for full details.
+
 ### Row Level Security (RLS)
 
 All tables have RLS enabled. Example policy:

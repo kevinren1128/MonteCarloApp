@@ -89,6 +89,11 @@ const CORS_HEADERS = {
 // ============================================
 
 export default {
+  // Scheduled handler for cron job (daily consensus data update)
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(handleScheduled(event, env));
+  },
+
   async fetch(request, env, ctx) {
     const startTime = Date.now();
     const requestId = crypto.randomUUID().slice(0, 8);
@@ -980,6 +985,402 @@ async function fetchFMPEndpoint(endpoint, apiKey, requestId = '') {
     log.error('FMP endpoint error', { requestId, endpoint, error: error.message });
     return null;
   }
+}
+
+// ============================================
+// SCHEDULED CRON JOB HANDLER
+// Daily consensus data update for shared database
+// ============================================
+
+/**
+ * Supabase REST API helper (no external dependencies)
+ * Uses direct fetch calls to Supabase REST API
+ */
+function createSupabaseRest(url, serviceKey) {
+  const baseUrl = `${url}/rest/v1`;
+  const headers = {
+    'apikey': serviceKey,
+    'Authorization': `Bearer ${serviceKey}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=minimal',
+  };
+
+  return {
+    async select(table, query = '') {
+      const res = await fetch(`${baseUrl}/${table}?${query}`, { headers });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`SELECT ${table}: ${res.status} - ${text}`);
+      }
+      return res.json();
+    },
+
+    async upsert(table, records) {
+      const res = await fetch(`${baseUrl}/${table}`, {
+        method: 'POST',
+        headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' },
+        body: JSON.stringify(records),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`UPSERT ${table}: ${res.status} - ${text}`);
+      }
+    },
+
+    async update(table, data, filter) {
+      const res = await fetch(`${baseUrl}/${table}?${filter}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`UPDATE ${table}: ${res.status} - ${text}`);
+      }
+    },
+
+    async rpc(fn) {
+      const res = await fetch(`${url}/rest/v1/rpc/${fn}`, {
+        method: 'POST',
+        headers,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`RPC ${fn}: ${res.status} - ${text}`);
+      }
+    },
+  };
+}
+
+/**
+ * Main scheduled handler - runs daily to update consensus data
+ */
+async function handleScheduled(event, env) {
+  log.info('[Cron] Starting consensus data update', { scheduledTime: event.scheduledTime });
+
+  // Check for required environment variables
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    log.error('[Cron] Missing Supabase credentials', {
+      hasUrl: !!env.SUPABASE_URL,
+      hasKey: !!env.SUPABASE_SERVICE_ROLE_KEY
+    });
+    return;
+  }
+
+  if (!env.FMP_API_KEY) {
+    log.error('[Cron] Missing FMP API key');
+    return;
+  }
+
+  const db = createSupabaseRest(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+
+  try {
+    // 1. Get tickers eligible for update
+    // Filter: active, not ETF, and either no next_retry_at or it's in the past
+    const tickers = await db.select('tracked_tickers',
+      'select=ticker,failure_count,failure_reason&active=eq.true&is_etf=eq.false&or=(next_retry_at.is.null,next_retry_at.lte.now())');
+
+    log.info('[Cron] Found tickers to update', { count: tickers.length });
+
+    if (tickers.length === 0) {
+      log.info('[Cron] No tickers to update, exiting');
+      return;
+    }
+
+    // 2. Batch process (respect rate limits)
+    const BATCH_SIZE = 5;
+    const BATCH_DELAY_MS = 3000;  // 3 seconds between batches (conservative for rate limits)
+
+    const results = { success: 0, partial: 0, failed: 0 };
+    const today = new Date().toISOString().split('T')[0];
+
+    for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
+      const batch = tickers.slice(i, i + BATCH_SIZE);
+
+      await Promise.all(batch.map(async ({ ticker, failure_count }) => {
+        try {
+          const consensus = await fetchFullFMPConsensus(ticker, env.FMP_API_KEY);
+
+          if (!consensus || consensus.failed) {
+            await handleTickerFailure(db, ticker, consensus?.error || 'No data found', failure_count);
+            results.failed++;
+            log.warn('[Cron] Ticker failed', { ticker, error: consensus?.error });
+          } else {
+            await saveConsensusSnapshot(db, ticker, today, consensus);
+            await resetTickerFailure(db, ticker);
+            results[consensus.partial ? 'partial' : 'success']++;
+            log.info('[Cron] Ticker updated', { ticker, partial: !!consensus.partial });
+          }
+        } catch (error) {
+          await handleTickerFailure(db, ticker, error.message, failure_count);
+          results.failed++;
+          log.error('[Cron] Error processing ticker', { ticker, error: error.message });
+        }
+      }));
+
+      // Rate limit pause between batches
+      if (i + BATCH_SIZE < tickers.length) {
+        await sleep(BATCH_DELAY_MS);
+      }
+    }
+
+    // 3. Refresh materialized view
+    try {
+      await db.rpc('refresh_consensus_latest');
+      log.info('[Cron] Materialized view refreshed');
+    } catch (error) {
+      log.error('[Cron] Failed to refresh materialized view', { error: error.message });
+    }
+
+    // 4. Cleanup old snapshots (keep 7 days)
+    try {
+      await db.rpc('cleanup_old_consensus_snapshots');
+      log.info('[Cron] Old snapshots cleaned up');
+    } catch (error) {
+      log.warn('[Cron] Failed to cleanup old snapshots', { error: error.message });
+    }
+
+    log.info('[Cron] Complete', results);
+
+  } catch (error) {
+    log.error('[Cron] Fatal error', { error: error.message, stack: error.stack?.slice(0, 200) });
+  }
+}
+
+/**
+ * Fetch comprehensive consensus data for a ticker from FMP
+ * Returns the full data structure matching the frontend's fetchConsensusData
+ */
+async function fetchFullFMPConsensus(ticker, apiKey) {
+  const startTime = Date.now();
+  const requestId = `cron-${crypto.randomUUID().slice(0, 8)}`;
+
+  try {
+    // Fetch all endpoints in parallel (same as frontend fmpService.js)
+    const [estimates, quote, ev, metrics, priceTargets, ratings, growth] = await Promise.all([
+      fetchFMPStableEndpoint(`/analyst-estimates/${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/quote/${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/enterprise-values/${ticker}?limit=1`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/key-metrics/${ticker}?limit=1`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/price-target-consensus/${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/analyst-stock-recommendations/${ticker}`, apiKey, requestId),
+      fetchFMPStableEndpoint(`/financial-growth/${ticker}?limit=1`, apiKey, requestId),
+    ]);
+
+    const duration = Date.now() - startTime;
+
+    // Check if we have minimum required data
+    const latestQuote = Array.isArray(quote) ? quote[0] : quote;
+    const latestEstimates = Array.isArray(estimates) && estimates.length > 0 ? estimates[0] : null;
+
+    if (!latestQuote && !latestEstimates) {
+      log.warn('[FMP Full] No data found', { ticker, duration });
+      return { failed: true, error: 'No quote or estimates data' };
+    }
+
+    // Extract key values
+    const price = latestQuote?.price || 0;
+    const marketCap = latestQuote?.marketCap || 0;
+    const latestEV = Array.isArray(ev) ? ev[0] : ev;
+    const latestMetrics = Array.isArray(metrics) ? metrics[0] : metrics;
+    const latestGrowth = Array.isArray(growth) ? growth[0] : growth;
+
+    // Calculate forward PE
+    const fy1Eps = latestEstimates?.estimatedEpsAvg || latestEstimates?.estimatedEpsLow;
+    const forwardPE = (price && fy1Eps && fy1Eps > 0) ? price / fy1Eps : null;
+
+    // Build ratings summary
+    const latestRatings = Array.isArray(ratings) ? ratings[0] : ratings;
+    const analystCount = latestRatings
+      ? (latestRatings.strongBuy || 0) + (latestRatings.buy || 0) +
+        (latestRatings.hold || 0) + (latestRatings.sell || 0) + (latestRatings.strongSell || 0)
+      : null;
+
+    // Get consensus rating string
+    let consensusRating = null;
+    if (latestRatings) {
+      const buyWeight = (latestRatings.strongBuy || 0) * 2 + (latestRatings.buy || 0);
+      const sellWeight = (latestRatings.strongSell || 0) * 2 + (latestRatings.sell || 0);
+      const holdWeight = latestRatings.hold || 0;
+      if (buyWeight > sellWeight + holdWeight) consensusRating = 'Buy';
+      else if (sellWeight > buyWeight + holdWeight) consensusRating = 'Sell';
+      else consensusRating = 'Hold';
+    }
+
+    // Price target consensus
+    const priceTargetConsensus = priceTargets?.targetConsensus || priceTargets?.priceTargetConsensus || null;
+
+    // Build the full data object (matches frontend structure)
+    const fullData = {
+      ticker,
+      name: latestQuote?.name || ticker,
+      price,
+      marketCap,
+      enterpriseValue: latestEV?.enterpriseValue,
+      changesPercentage: latestQuote?.changesPercentage || 0,
+
+      // FY1 estimates
+      fy1: latestEstimates ? {
+        fiscalYear: new Date(latestEstimates.date).getFullYear(),
+        date: latestEstimates.date,
+        revenue: latestEstimates.estimatedRevenueAvg || latestEstimates.estimatedRevenueLow,
+        eps: fy1Eps,
+        ebitda: latestEstimates.estimatedEbitdaAvg || latestEstimates.estimatedEbitdaLow,
+        netIncome: latestEstimates.estimatedNetIncomeAvg || latestEstimates.estimatedNetIncomeLow,
+      } : null,
+
+      // FY2 estimates (second in array)
+      fy2: (Array.isArray(estimates) && estimates.length > 1) ? {
+        date: estimates[1].date,
+        revenue: estimates[1].estimatedRevenueAvg || estimates[1].estimatedRevenueLow,
+        eps: estimates[1].estimatedEpsAvg || estimates[1].estimatedEpsLow,
+        ebitda: estimates[1].estimatedEbitdaAvg || estimates[1].estimatedEbitdaLow,
+        netIncome: estimates[1].estimatedNetIncomeAvg || estimates[1].estimatedNetIncomeLow,
+      } : null,
+
+      // Multiples
+      multiples: {
+        forwardPE,
+        evToEbitda: latestMetrics?.evToEbitda,
+        priceToSales: latestMetrics?.priceToSalesRatio,
+      },
+
+      // Price targets
+      priceTargets: priceTargets ? {
+        high: priceTargets.targetHigh,
+        low: priceTargets.targetLow,
+        consensus: priceTargetConsensus,
+        median: priceTargets.targetMedian,
+        upside: (price && priceTargetConsensus) ? (priceTargetConsensus - price) / price : null,
+      } : null,
+
+      // Ratings
+      ratings: latestRatings ? {
+        strongBuy: latestRatings.strongBuy,
+        buy: latestRatings.buy,
+        hold: latestRatings.hold,
+        sell: latestRatings.sell,
+        strongSell: latestRatings.strongSell,
+        consensus: consensusRating,
+        totalAnalysts: analystCount,
+      } : null,
+
+      // Growth
+      growth: latestGrowth ? {
+        revenue: latestGrowth.revenueGrowth,
+        eps: latestGrowth.epsgrowth,
+        netIncome: latestGrowth.netIncomeGrowth,
+      } : null,
+
+      // Health metrics
+      health: {
+        debtToEquity: latestMetrics?.debtToEquity,
+        currentRatio: latestMetrics?.currentRatio,
+      },
+
+      // Metadata
+      fetchedAt: new Date().toISOString(),
+      partial: !latestEstimates || !latestRatings || !priceTargets,
+    };
+
+    log.info('[FMP Full] Fetched', { ticker, duration, hasEstimates: !!latestEstimates, hasRatings: !!latestRatings });
+
+    return fullData;
+
+  } catch (error) {
+    log.error('[FMP Full] Error', { ticker, error: error.message });
+    return { failed: true, error: error.message };
+  }
+}
+
+/**
+ * Fetch from FMP stable API endpoint
+ */
+async function fetchFMPStableEndpoint(endpoint, apiKey, requestId = '') {
+  const BASE_URL = 'https://financialmodelingprep.com/stable';
+  try {
+    const url = `${BASE_URL}${endpoint}${endpoint.includes('?') ? '&' : '?'}apikey=${apiKey}`;
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!response.ok) {
+      log.warn('FMP stable endpoint failed', { requestId, endpoint, status: response.status });
+      return null;
+    }
+    const data = await response.json();
+    // Check for error responses
+    if (data && data['Error Message']) {
+      log.warn('FMP stable endpoint error message', { requestId, endpoint, error: data['Error Message'] });
+      return null;
+    }
+    return data;
+  } catch (error) {
+    log.error('FMP stable endpoint exception', { requestId, endpoint, error: error.message });
+    return null;
+  }
+}
+
+/**
+ * Save consensus data to database
+ */
+async function saveConsensusSnapshot(db, ticker, asOfDate, consensus) {
+  await db.upsert('consensus_snapshots', [{
+    ticker,
+    as_of_date: asOfDate,
+    currency: consensus.currency?.reporting || 'USD',
+    price: consensus.price,
+    market_cap: consensus.marketCap,
+    forward_pe: consensus.multiples?.forwardPE,
+    fy1_revenue: consensus.fy1?.revenue,
+    fy1_eps: consensus.fy1?.eps,
+    analyst_count: consensus.ratings?.totalAnalysts,
+    consensus_rating: consensus.ratings?.consensus,
+    price_target_consensus: consensus.priceTargets?.consensus,
+    data: consensus,  // Store FULL structure in JSONB
+    status: consensus.partial ? 'partial' : 'ok',
+    fetched_at: new Date().toISOString(),
+  }]);
+}
+
+/**
+ * Handle ticker failure with exponential backoff
+ */
+async function handleTickerFailure(db, ticker, reason, currentFailureCount) {
+  const newFailureCount = (currentFailureCount || 0) + 1;
+
+  // Exponential backoff: 1h, 4h, 12h, 24h, 3d, 7d, 30d
+  const backoffHours = [1, 4, 12, 24, 72, 168, 720];
+  const backoffIndex = Math.min(newFailureCount - 1, backoffHours.length - 1);
+  const nextRetry = new Date(Date.now() + backoffHours[backoffIndex] * 60 * 60 * 1000);
+
+  // Detect unsupported international tickers
+  const isUnsupported = reason?.includes('not found') || reason?.includes('no data') || reason?.includes('No');
+
+  await db.update('tracked_tickers', {
+    failure_count: newFailureCount,
+    last_failure_at: new Date().toISOString(),
+    next_retry_at: nextRetry.toISOString(),
+    failure_reason: isUnsupported ? 'unsupported' : 'fetch_error',
+  }, `ticker=eq.${encodeURIComponent(ticker)}`);
+}
+
+/**
+ * Reset ticker failure state on success
+ */
+async function resetTickerFailure(db, ticker) {
+  await db.update('tracked_tickers', {
+    failure_count: 0,
+    last_failure_at: null,
+    next_retry_at: null,
+    failure_reason: null,
+  }, `ticker=eq.${encodeURIComponent(ticker)}`);
+}
+
+/**
+ * Sleep helper
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ============================================
