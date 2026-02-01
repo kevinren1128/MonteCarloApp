@@ -5699,7 +5699,16 @@ function MonteCarloSimulator() {
     const sigmaArray = derivedParams.map(d => d.sigma);
     const skewArray = derivedParams.map(d => d.skew);
     const dfArray = derivedParams.map(d => d.tailDf);
-    
+
+    // Debug: log distribution params
+    console.log('📊 Distribution params:', {
+      tickers: positions.map(p => p.ticker).join(', '),
+      muRange: `${Math.min(...muArray).toFixed(3)} to ${Math.max(...muArray).toFixed(3)}`,
+      sigmaRange: `${Math.min(...sigmaArray).toFixed(3)} to ${Math.max(...sigmaArray).toFixed(3)}`,
+      weightsRange: `${Math.min(...weights).toFixed(3)} to ${Math.max(...weights).toFixed(3)}`,
+      percentilesSample: positions[0] ? { p5: positions[0].p5, p50: positions[0].p50, p95: positions[0].p95 } : 'none',
+    });
+
     // ==================== MATCH SIMULATION TAB METHODOLOGY ====================
     // Use adjusted weights (accounting for leverage) and include cash
     const totalValue = portfolioValue || 1;
@@ -5951,8 +5960,24 @@ function MonteCarloSimulator() {
       const cvar5 = cvar5Vals.length > 0 ? cvar5Vals.reduce((a, b) => a + b, 0) / cvar5Vals.length : var5;
       const var1 = sorted[Math.floor(sorted.length * 0.01)];
       const stdDev = Math.sqrt(validReturns.reduce((sum, v) => sum + (v - mean) ** 2, 0) / validReturns.length);
-      const sharpe = stdDev > 0 ? (mean - rf) / stdDev : 0;
-      
+      const sharpe = stdDev > 0.0001 ? (mean - rf) / stdDev : 0; // Guard against tiny stdDev
+
+      // Debug: log if sharpe is extreme
+      if (Math.abs(sharpe) > 10) {
+        console.warn('⚠️ MC Debug:', label, {
+          mean: mean.toFixed(6),
+          rf: rf.toFixed(6),
+          stdDev: stdDev.toFixed(8),
+          sharpe: sharpe.toFixed(4),
+          validCount: validReturns.length,
+          min: sorted[0]?.toFixed(4),
+          max: sorted[sorted.length - 1]?.toFixed(4),
+          weightsSum: testAdjustedWeights.reduce((a, b) => a + b, 0).toFixed(4),
+          sigmaMin: Math.min(...sigmaArr).toFixed(4),
+          sigmaMax: Math.max(...sigmaArr).toFixed(4),
+        });
+      }
+
       return { mean, median, pLoss, var5, cvar5, var1, stdDev, sharpe, label };
     };
     
@@ -5963,7 +5988,15 @@ function MonteCarloSimulator() {
     setOptimizationProgress({ current: 25, total: 100, phase: `Monte Carlo: Baseline portfolio (${formatPaths(pathsPerSwap)} paths${useQmc ? ', QMC' : ''})...` });
     await new Promise(r => setTimeout(r, 10));
     const baselineMC = await runMiniMonteCarlo(adjustedWeights, 'Baseline', 0);
-    
+
+    // Debug: log baseline MC results
+    console.log('📊 Baseline MC:', {
+      mean: (baselineMC.mean * 100).toFixed(2) + '%',
+      stdDev: (baselineMC.stdDev * 100).toFixed(2) + '%',
+      sharpe: baselineMC.sharpe.toFixed(4),
+      pLoss: (baselineMC.pLoss * 100).toFixed(1) + '%',
+    });
+
     // Run for each top swap
     const swapMCResults = [];
     for (let i = 0; i < topSwaps.length; i++) {
@@ -6002,7 +6035,15 @@ function MonteCarloSimulator() {
     
     // Sort by MC Sharpe improvement
     swapMCResults.sort((a, b) => b.deltaMetrics.deltaMCSharpe - a.deltaMetrics.deltaMCSharpe);
-    
+
+    // Debug: log top 3 swap delta metrics
+    console.log('📊 Top 3 swaps deltaMCSharpe:', swapMCResults.slice(0, 3).map(s => ({
+      swap: `${s.sellTicker}→${s.buyTicker}`,
+      deltaMCSharpe: s.deltaMetrics.deltaMCSharpe.toFixed(6),
+      mcSharpe: s.mc.sharpe.toFixed(4),
+      baselineSharpe: baselineMC.sharpe.toFixed(4),
+    })));
+
     setOptimizationProgress({ current: 95, total: 100, phase: 'Finalizing results...' });
     await new Promise(r => setTimeout(r, 10));
     
