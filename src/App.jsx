@@ -11,7 +11,7 @@ import {
 } from './components/common';
 
 // Hooks for autosave, undo/redo, simulation, and sync
-import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation, usePortfolioSync, useStaleness, initialInputVersions, initialTabComputedVersions, DEPENDENCIES } from './hooks';
+import { useAutosave, AutosaveStatus, useUndoRedo, useSimulation, usePortfolioSync, useStaleness, initialInputVersions, initialTabComputedVersions, DEPENDENCIES, useDocumentTitle } from './hooks';
 
 // Auth components
 import { UserMenu } from './components/auth';
@@ -3544,6 +3544,13 @@ function MonteCarloSimulator() {
     if (portfolioValue === 0) return 0;
     return cashBalance / portfolioValue;
   }, [cashBalance, portfolioValue]);
+
+  // Dynamic document title based on app state
+  useDocumentTitle({
+    activeTab,
+    isLoading: isFetchingUnified || isFullLoading,
+    portfolioValue,
+  });
 
   // Wrapper for simulation hook - passes current portfolio data
   const runSimulation = useCallback((correlationMatrix = null) => {

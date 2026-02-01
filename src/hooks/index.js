@@ -40,6 +40,9 @@ export {
   DEPENDENCIES,
 } from './useStaleness';
 
+// Document title hook
+export { useDocumentTitle } from './useDocumentTitle';
+
 /**
  * HOOK EXTRACTION GUIDE
  * =====================
