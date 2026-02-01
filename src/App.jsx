@@ -1269,19 +1269,27 @@ function MonteCarloSimulator() {
     }
   }, [editedCorrelation]);
 
+  // Ref to always have the latest inputVersions (avoids stale closure issues)
+  const inputVersionsRef = useRef(inputVersions);
+  useEffect(() => {
+    inputVersionsRef.current = inputVersions;
+  }, [inputVersions]);
+
   // Mark a tab as computed with current input versions
+  // Uses ref to avoid stale closure issues when called from long-running operations
   const markTabComputed = useCallback((tabId) => {
     const deps = DEPENDENCIES[tabId] || [];
+    const current = inputVersionsRef.current; // Always reads latest from ref
     const newVersions = {};
     for (const dep of deps) {
-      newVersions[dep] = inputVersions[dep];
+      newVersions[dep] = current[dep];
     }
     setTabComputedVersions(prev => ({
       ...prev,
       [tabId]: newVersions,
     }));
     console.log(`[Stale] Marked ${tabId} as computed with versions:`, newVersions);
-  }, [inputVersions]);
+  }, []); // Empty deps - safe because we read from ref
 
   // Debug: Log staleness status whenever it changes
   useEffect(() => {
@@ -1511,23 +1519,31 @@ function MonteCarloSimulator() {
 
   // Track previous isFullLoading state to detect completion
   const wasFullLoadingRef = useRef(false);
+  // Flag to defer marking tabs fresh until inputVersions has settled
+  const pendingFullLoadCompleteRef = useRef(false);
 
-  // Clear stale status for ALL tabs when Load All completes
-  // This fixes the stale closure issue where clearStaleTab called during runFullLoad
-  // has outdated inputVersions (positions may have been updated during the load)
+  // Detect when Load All completes and set pending flag
   useEffect(() => {
-    // Detect transition from loading to not loading (completion)
     if (wasFullLoadingRef.current && !isFullLoading) {
-      console.log('[Stale] Load All completed - marking all computed tabs fresh');
-      // Mark all tabs that were computed during the full load
-      clearStaleTab('distributions');
-      clearStaleTab('correlation');
-      clearStaleTab('simulation');
-      clearStaleTab('factors');
-      clearStaleTab('optimize');
+      console.log('[Stale] Load All completed - setting pending flag for deferred tab marking');
+      pendingFullLoadCompleteRef.current = true;
     }
     wasFullLoadingRef.current = isFullLoading;
-  }, [isFullLoading, clearStaleTab]);
+  }, [isFullLoading]);
+
+  // Deferred effect: Mark all tabs fresh AFTER inputVersions has settled
+  // This runs when inputVersions changes after Load All completes
+  useEffect(() => {
+    if (!pendingFullLoadCompleteRef.current || isFullLoading) return;
+
+    console.log('[Stale] Deferred: Marking all computed tabs fresh with settled inputVersions:', inputVersions);
+    clearStaleTab('distributions');
+    clearStaleTab('correlation');
+    clearStaleTab('simulation');
+    clearStaleTab('factors');
+    clearStaleTab('optimize');
+    pendingFullLoadCompleteRef.current = false;
+  }, [inputVersions, isFullLoading, clearStaleTab]);
 
   // ============================================
   // UI STATE: Confirmation Dialogs
