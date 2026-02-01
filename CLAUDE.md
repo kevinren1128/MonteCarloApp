@@ -2,6 +2,31 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Memory
+
+**See `/notes` directory for detailed context on each feature.**
+
+Before starting any task:
+- Check relevant notes files for context
+
+After completing any task or PR:
+- Update or create the relevant notes file
+- Document decisions, gotchas, and lessons learned
+
+### Notes Index
+
+| File | Description |
+|------|-------------|
+| [notes/architecture-overview.md](./notes/architecture-overview.md) | High-level system design |
+| [notes/auth-implementation.md](./notes/auth-implementation.md) | Supabase auth, Google OAuth |
+| [notes/cloudflare-workers.md](./notes/cloudflare-workers.md) | Yahoo Finance proxy, caching |
+| [notes/database-schema.md](./notes/database-schema.md) | Supabase tables, RLS policies |
+| [notes/kv-caching.md](./notes/kv-caching.md) | What's cached, TTLs, key structure |
+| [notes/financial-calculations.md](./notes/financial-calculations.md) | Monte Carlo, distributions, factor analysis |
+| [notes/deployment.md](./notes/deployment.md) | Vercel, environment variables, deploy process |
+
+---
+
 ## Build & Development Commands
 
 ```bash
@@ -491,6 +516,15 @@ Read `docs/ARCHITECTURE.md` first for comprehensive system documentation, algori
 - Push to GitHub after commits
 - Use claude-mem:make-plan for multi-step implementation tasks
 - Use claude-mem:do to execute implementation plans
+
+### Project Memory (REQUIRED)
+
+At the end of every task or PR:
+1. **Update the relevant notes file** (or create a new one in `/notes`)
+2. **Document what changed and why**
+3. **Note any gotchas** or things future sessions should know
+
+This is our long-term memory. Treat it as essential, not optional.
 
 ### Consult Codex for Second Opinions
 
