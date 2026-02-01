@@ -111,6 +111,35 @@ Refreshed concurrently after each cron run.
 - 6th failure: retry in 7 days
 - 7th+ failure: retry in 30 days
 
+## ConsensusTab UI Features
+
+### Valuation Table Columns
+
+The valuation view displays these metrics:
+
+| Column | Source | Notes |
+|--------|--------|-------|
+| FY25 P/E | `multiples.forwardPE` | Forward P/E from FMP |
+| **FY25 EV/EBIT** | Derived | `enterpriseValue / fy1.ebit` (new Jan 2026) |
+| FY25 EV/EBITDA | `multiples.fy1EvToEbitda` | Forward EV/EBITDA |
+| FY25 P/FCF | `multiples.priceToFCF` | Forward price to free cash flow |
+| TTM P/FCF | Derived | `marketCap / freeCashFlow` (fixed Jan 2026) |
+
+**EV/EBIT**: Added between P/E and EV/EBITDA columns. Better than EV/EBITDA for comparing capital-intensive companies since it includes D&A.
+
+**TTM P/FCF Fix**: Previously showed dashes when `multiples.priceToFCF` was missing. Now calculates inline from `marketCap / cashFlow.freeCashFlow`.
+
+### Sorting
+
+All valuation columns support click-to-sort with fallback calculations:
+```javascript
+case 'evEbit':
+  aVal = a.multiples?.fy1EvToEbit ?? (a.enterpriseValue / a.fy1?.ebit);
+  // Falls back to 999 for missing data (sorts to end)
+```
+
+---
+
 ## Frontend Integration
 
 ### `consensusService.js`

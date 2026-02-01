@@ -626,7 +626,15 @@ Key endpoints used:
 
 ## Recent Session Context (Jan 31, 2026)
 
-**What was fixed today:**
+**UI improvements (latest):**
+- Sidebar: Changed logo icon from 📈 to 💹 (unique from Distributions tab)
+- Sidebar: Increased logo sizing (26px icon, 17px bold text)
+- Sidebar: Added compact "FS" gradient branding for collapsed/narrow mode
+- ConsensusTab: Added FY25 EV/EBIT column between P/E and EV/EBITDA
+- ConsensusTab: Fixed TTM P/FCF showing dashes (now derives from marketCap/freeCashFlow)
+- GoogleSignIn: Updated button to dark theme matching sidebar visual language
+
+**What was fixed earlier today:**
 - Layer 3: Supabase persistence for currency fields (currency, domestic_price, exchange_rate)
 - Fixed `exchangeRate` not being saved to position objects
 - Fixed `positionsKey` not including currency fields (sync was skipping FX changes)
@@ -640,3 +648,4 @@ Key endpoints used:
 - International stocks (6525.T, BESI.AS) work end-to-end
 - FX data persists across login sessions
 - Positions auto-sort by value after any price refresh
+- Sidebar has responsive branding (full logo vs "FS" compact)

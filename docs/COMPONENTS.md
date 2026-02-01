@@ -341,6 +341,66 @@ Bar chart showing per-position risk/return contribution.
 
 ---
 
+## Sidebar Component
+
+The main navigation sidebar with responsive modes.
+
+Location: `src/components/common/Sidebar.jsx`
+
+### Features
+
+- **Draggable width**: Drag right edge to resize (persists to localStorage)
+- **Three responsive modes**:
+  - **Narrow** (52px): Icon-only view with "FS" branding
+  - **Medium** (180px): Compact labels, abbreviated text
+  - **Wide** (280px): Full labels and descriptions
+- **💹 Logo**: Gradient-styled "factorsim.xyz" branding (collapses to "FS" in narrow mode)
+- **Tab navigation**: Emoji icons with labels for each app section
+- **User auth section**: Google Sign In button or User Menu dropdown
+
+### Responsive Behavior
+
+| Width | Mode | Logo | Tab Labels |
+|-------|------|------|------------|
+| <100px | Narrow | "FS" gradient | Hidden |
+| 100-200px | Medium | Full logo | Compact |
+| >200px | Wide | Full logo | Full |
+
+### Style Tokens
+
+```javascript
+styles = {
+  logoIcon: { fontSize: '26px' },
+  logoText: { fontSize: '17px', fontWeight: '700' },
+  // "FS" compact branding uses gradient background-clip
+}
+```
+
+---
+
+## Auth Components
+
+Authentication-related components.
+
+Location: `src/components/auth/`
+
+### GoogleSignIn
+
+Styled Google OAuth sign-in button matching the dark theme.
+
+```jsx
+<GoogleSignIn compact={false} iconOnly={false} />
+```
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `compact` | `boolean` | `false` | Use smaller sizing |
+| `iconOnly` | `boolean` | `false` | Show only Google icon (for narrow sidebar) |
+
+**Style**: Dark semi-transparent background with white text, matching sidebar visual language.
+
+---
+
 ## Layout Components
 
 Structural layout components.
@@ -434,4 +494,4 @@ interface SimulationResults {
 
 ---
 
-*Last updated: January 2026*
+*Last updated: January 31, 2026*
