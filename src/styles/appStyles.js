@@ -39,6 +39,7 @@ export const styles = {
     flex: 1,
     minWidth: 0, // Allow flex item to shrink below content size
     padding: '24px',
+    paddingTop: 'calc(24px + 28px)', // Account for ticker tape height (28px)
     background: 'linear-gradient(180deg, rgba(20, 20, 32, 0.5) 0%, transparent 300px)',
     overflowY: 'auto',
     height: '100vh',

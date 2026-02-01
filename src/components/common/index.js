@@ -52,6 +52,7 @@ export { default as StaleBanner } from './StaleBanner';
 
 // Layout components
 export { default as Sidebar } from './Sidebar';
+export { default as TickerTape, TICKER_HEIGHT } from './TickerTape';
 
 // Tooltips
 export { 

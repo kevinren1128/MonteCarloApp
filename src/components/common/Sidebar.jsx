@@ -190,6 +190,7 @@ const Sidebar = memo(({
       width: sidebarWidth,
       minWidth: sidebarWidth,
       height: '100vh',
+      paddingTop: '28px', // Account for ticker tape
       background: 'linear-gradient(180deg, rgba(12, 12, 22, 0.98) 0%, rgba(8, 8, 16, 0.98) 100%)',
       borderRight: '1px solid rgba(42, 42, 74, 0.6)',
       display: 'flex',

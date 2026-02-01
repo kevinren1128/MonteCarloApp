@@ -7,7 +7,7 @@ import {
   ConfirmDialog, EmptyState, KeyboardShortcuts, UserGuide,
   AnimatedPortfolioValue, InfoTooltip, AddPositionsModal, ScreenshotImportModal,
   CommandPalette, AutosaveIndicator, RecoveryDialog,
-  Sidebar,
+  Sidebar, TickerTape, TICKER_HEIGHT,
 } from './components/common';
 
 // Hooks for autosave, undo/redo, simulation, and sync
@@ -7333,6 +7333,9 @@ function MonteCarloSimulator() {
 
   return (
     <div style={styles.appRoot}>
+      {/* Ticker Tape - scrolling portfolio positions */}
+      <TickerTape positions={positions} />
+
       {/* Sidebar Navigation */}
       <Sidebar
         isExpanded={sidebarExpanded}
