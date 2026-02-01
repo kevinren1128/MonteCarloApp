@@ -1213,28 +1213,28 @@ const ConsensusTab = memo(({ positions, styles }) => {
           </div>
 
           {/* Returns metrics */}
-          <div style={{ marginTop: '12px', display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '10px' }}>
-            <div style={{ textAlign: 'center' }}>
+          <div style={{ marginTop: '12px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ textAlign: 'center', minWidth: '60px' }}>
               <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }} title="Return on Equity. How efficiently profits are generated from shareholder equity">ROE</div>
               <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getMarginColor(row.profitability?.roe, { good: 0.15, ok: 0.08 }) }}>{formatPct(row.profitability?.roe)}</div>
             </div>
-            <div style={{ textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', minWidth: '60px' }}>
               <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }} title="Return on Assets. Measures profitability relative to total assets">ROA</div>
               <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getMarginColor(row.profitability?.roa, { good: 0.08, ok: 0.03 }) }}>{formatPct(row.profitability?.roa)}</div>
             </div>
-            <div style={{ textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', minWidth: '60px' }}>
               <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }} title="Return on Invested Capital. Shows efficiency of capital allocation">ROIC</div>
               <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getMarginColor(row.profitability?.roic, { good: 0.12, ok: 0.06 }) }}>{formatPct(row.profitability?.roic)}</div>
             </div>
-            <div style={{ textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', minWidth: '70px' }}>
               <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>3Y Avg ROE</div>
               <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic' }}>{formatPct(row.profitability?.avgROE)}</div>
             </div>
-            <div style={{ textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', minWidth: '75px' }}>
               <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>3Y Rev CAGR</div>
               <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getGrowthColor(row.growth?.revenue) }}>{row.growth?.revenue != null ? formatPct(row.growth.revenue, true) : '—'}</div>
             </div>
-            <div style={{ textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', minWidth: '75px' }}>
               <div style={{ fontSize: '8px', color: 'rgba(255,255,255,0.4)' }}>3Y EPS CAGR</div>
               <div style={{ fontSize: '11px', fontWeight: '600', fontStyle: 'italic', color: getGrowthColor(row.growth?.eps) }}>{row.growth?.eps != null ? formatPct(row.growth.eps, true) : '—'}</div>
             </div>
